@@ -1,183 +1,243 @@
-# Security Guide
+# Security Guide — Evaemon OTK-PQ
 
-This document describes the threat model Evaemon is designed to address, the security properties of the supported algorithms, operational best practices, and known limitations.
+This document describes the threat model, security properties, operational best practices, and known limitations of Evaemon OTK-PQ.
 
 ---
 
 ## Table of Contents
 
-1. [Threat model](#threat-model)
-2. [Algorithm selection](#algorithm-selection)
-3. [Key management](#key-management)
-4. [Server hardening](#server-hardening)
-5. [Client hardening](#client-hardening)
-6. [Backup security](#backup-security)
-7. [Key rotation policy](#key-rotation-policy)
-8. [Key migration](#key-migration-classical-to-post-quantum)
-9. [PQ-only test mode](#pq-only-test-mode)
-10. [Algorithm performance benchmark](#algorithm-performance-benchmark)
-11. [CVE advisories](#cve-advisories-and-dependency-vulnerabilities)
-12. [Known limitations and caveats](#known-limitations-and-caveats)
+1. [OTK-PQ threat model](#otk-pq-threat-model)
+2. [Three-layer security architecture](#three-layer-security-architecture)
+3. [Algorithm selection](#algorithm-selection)
+4. [Key management](#key-management)
+5. [OTK-PQ operational security](#otk-pq-operational-security)
+6. [Server hardening](#server-hardening)
+7. [Client hardening](#client-hardening)
+8. [Backup security](#backup-security)
+9. [Key rotation policy](#key-rotation-policy)
+10. [Algorithm performance](#algorithm-performance)
+11. [CVE advisories](#cve-advisories)
+12. [Known limitations](#known-limitations)
 13. [Incident response](#incident-response)
 
 ---
 
-## Threat model
+## OTK-PQ threat model
 
-### What this toolkit protects against
+### What OTK-PQ defends against
 
-**Harvest-now / decrypt-later attacks**
-A powerful adversary can record encrypted SSH traffic today and decrypt it once they have access to a cryptographically-relevant quantum computer. Evaemon addresses this at both layers:
-- **Session encryption (KEX):** the generated `sshd_config` and client connection scripts set `KexAlgorithms` to prefer Kyber-based hybrid key exchange, meaning the session key itself cannot be recovered by a future quantum computer.
-- **Authentication:** PQ signature algorithms ensure that recorded authentication exchanges cannot be forged later by a quantum attacker.
+**Quantum harvest attacks ("capture now, decrypt later")**
+Session keys are hybrid (classical + post-quantum) and ephemeral. The master key is post-quantum (ML-DSA-87) and never transmitted. An adversary recording traffic today cannot decrypt it with a future quantum computer.
 
-**Authentication forgery by a quantum-capable adversary**
-Classical RSA and ECDSA authentication can be broken by a sufficiently powerful quantum computer running Shor's algorithm. The signature schemes in this toolkit are based on lattice or hash problems believed to be hard even for quantum computers.
+**Key theft**
+Stealing an ephemeral session key after use gains nothing — it is already destroyed on both client and server, and recorded in the revocation ledger. The master private key never touches the network.
 
-### What this toolkit does NOT protect against
+**Man-in-the-middle**
+Session keys are signed by the master key. An attacker cannot forge the ML-DSA-87 signature without the master private key.
 
-- **Compromised server** -- if an attacker has root on the server, no SSH configuration helps.
-- **Compromised endpoint** -- malware on the client can steal keys regardless of algorithm.
-- **Side-channel attacks** -- this toolkit does not address timing or power side-channels in the OQS library implementations.
-- **Denial of service** -- monitoring tools detect issues; they do not prevent attacks on the SSH port.
-- **Protocol downgrade to classical SSH** -- this toolkit runs a *separate* sshd; the system's standard OpenSSH remains unchanged and clients can still connect to it unless you firewall it.
+**Replay attacks**
+The revocation ledger records every used session key hash. Nonce validation (timestamp + CSPRNG) ensures temporal uniqueness. A replayed session bundle is rejected immediately.
+
+**Server compromise**
+The server only holds master *public* keys. The private master key never leaves the client. A compromised server cannot forge session keys or recover the master private key.
+
+### What OTK-PQ does NOT defend against
+
+- **Initial enrollment compromise** — if the first master key transfer is intercepted, the attacker has the master public key (but still needs the private key to forge sessions). If they substitute their own public key during enrollment, they can impersonate the client. Mitigate with out-of-band verification.
+- **Client device compromise** — if the client device is fully compromised and the master private key is extracted, the system is broken. Hardware-backed key storage mitigates this.
+- **Side-channel attacks** — this toolkit does not address timing or power side-channels in OQS library implementations.
+- **Denial of service** — monitoring tools detect issues but do not prevent attacks on the SSH port.
+- **Protocol downgrade** — the system's standard OpenSSH remains unchanged; clients can still connect to it unless firewalled.
+
+---
+
+## Three-layer security architecture
+
+### Layer 1 — Post-Quantum Master Key
+
+| Property | Value |
+|----------|-------|
+| Algorithm | ML-DSA-87 (NIST FIPS 204) |
+| Security level | NIST Level 5 |
+| Location | Client only — `~/.ssh/otk/master/` |
+| Network exposure | **None** — never transmitted after initial enrollment |
+| Purpose | Sign ephemeral session keys |
+| Rotation | Recommended annually (`OTK_MASTER_MAX_AGE_DAYS=365`) |
+| Compromise impact | Full — attacker can forge session keys |
+
+### Layer 2 — Hybrid Session Keys
+
+| Property | Value |
+|----------|-------|
+| Classical component | Ed25519 (RFC 8032) |
+| PQ component | ML-DSA-87 (FIPS 204) |
+| KEX | ML-KEM-1024 hybrid (FIPS 203) + X25519 |
+| Lifetime | Single session — generated and destroyed per connection |
+| Network exposure | Public keys + signature + nonce only |
+| Verification | Master key signature verified by server |
+| Compromise impact | **Zero** — key is already destroyed and revoked |
+
+### Layer 3 — One-Time Execution & Destruction
+
+| Property | Value |
+|----------|-------|
+| Destruction method | `shred` (multi-pass overwrite + zero + unlink) |
+| Verification | Post-destruction check confirms no residual material |
+| Revocation | SHA3-256 hash of session key stored in ledger |
+| Replay prevention | Ledger check + nonce timestamp validation |
+| Nonce window | 300 seconds (`OTK_NONCE_MAX_AGE`) |
+| Ledger pruning | Entries older than 7 days auto-pruned |
+
+### Security properties comparison
+
+| Property | Traditional SSH | OTK-PQ |
+|----------|----------------|--------|
+| Key reuse | Same key indefinitely | Never — one key per session |
+| Forward secrecy | Session-level only | Authentication + session level |
+| Quantum resistance | None (RSA/Ed25519) | Hybrid classical + post-quantum |
+| Stolen key impact | Full access until revoked | Zero — key already expired |
+| Replay attacks | Possible if key stolen | Impossible — revocation ledger |
+| Master key exposure | Key is the auth key | Master key never on the wire |
+| Attack surface | Persistent | Ephemeral — exists only during session |
 
 ---
 
 ## Algorithm selection
 
-### Supported algorithms and security levels
+### OTK-PQ algorithms
 
-Algorithms are ordered by **multi-family risk diversification** priority. The top 3 span different mathematical assumption families so that a break in one does not compromise all keys.
+| Purpose | Algorithm | Standard | Level |
+|---------|-----------|----------|-------|
+| Master signing | ML-DSA-87 | FIPS 204 | 5 |
+| Master encapsulation | ML-KEM-1024 | FIPS 203 | 5 |
+| Session signing | Ed25519 | RFC 8032 | — |
+| Session KEX | X25519 + ML-KEM-1024 | RFC 7748 + FIPS 203 | 5 |
+| Session KDF | HKDF-SHA-512 | RFC 5869 | — |
+| Revocation hash | SHA3-256 | FIPS 202 | — |
 
-| # | Algorithm | Family | NIST Level | Notes |
-|---|-----------|--------|-----------|-------|
-| 1 | `ssh-falcon1024` | Lattice (NTRU) | 5 | **Recommended** -- fastest verification, compact at L5 |
-| 2 | `ssh-mldsa-65` | Lattice (Module-LWE) | 3 | NIST FIPS 204 primary standard |
-| 3 | `ssh-sphincssha2256fsimple` | Hash (SPHINCS+ / FIPS 205) | 5 | Minimal cryptographic assumptions |
-| 4 | `ssh-slhdsa-sha2-256f` | Hash (SLH-DSA / FIPS 205) | 5 | Standardised FIPS 205 name (liboqs >= 0.12.0) |
-| 5 | `ssh-mldsa-87` | Lattice (Module-LWE) | 5 | Conservative L5 lattice choice |
-| 6 | `ssh-mldsa-44` | Lattice (Module-LWE) | 2 | Lightweight ML-DSA variant |
-| 7 | `ssh-sphincssha2128fsimple` | Hash (SPHINCS+ / FIPS 205) | 1 | Fast hash-based, minimal assumptions |
-| 8 | `ssh-slhdsa-sha2-128f` | Hash (SLH-DSA / FIPS 205) | 1 | SLH-DSA lightweight variant |
-| 9 | `ssh-falcon512` | Lattice (NTRU) | 1 | Constrained devices only |
-| 10 | `ssh-mayo2` | Multivariate (Oil-Vinegar) | 2 | Compact signatures |
-| 11 | `ssh-mayo3` | Multivariate (Oil-Vinegar) | 3 | Balanced |
-| 12 | `ssh-mayo5` | Multivariate (Oil-Vinegar) | 5 | Conservative multivariate |
+### PQ authentication algorithms (host keys and client keys)
+
+| # | Algorithm | Family | NIST Level |
+|---|-----------|--------|-----------|
+| 1 | `ssh-falcon1024` | Lattice (NTRU) | 5 |
+| 2 | `ssh-mldsa-65` | Lattice (Module-LWE) | 3 |
+| 3 | `ssh-sphincssha2256fsimple` | Hash (SPHINCS+) | 5 |
+| 4 | `ssh-slhdsa-sha2-256f` | Hash (SLH-DSA) | 5 |
+| 5 | `ssh-mldsa-87` | Lattice (Module-LWE) | 5 |
+| 6 | `ssh-mldsa-44` | Lattice (Module-LWE) | 2 |
+| 7 | `ssh-sphincssha2128fsimple` | Hash (SPHINCS+) | 1 |
+| 8 | `ssh-slhdsa-sha2-128f` | Hash (SLH-DSA) | 1 |
+| 9 | `ssh-falcon512` | Lattice (NTRU) | 1 |
+| 10 | `ssh-mayo2` | Multivariate | 2 |
+| 11 | `ssh-mayo3` | Multivariate | 3 |
+| 12 | `ssh-mayo5` | Multivariate | 5 |
 
 ### Multi-family risk diversification
 
-Deploy keys from **at least two different assumption families** so that a breakthrough in one area of mathematics does not compromise all authentication:
+Deploy keys from **at least two different assumption families**:
 
 | Family | Algorithms | Assumption |
 |--------|-----------|------------|
 | Lattice (NTRU) | Falcon-1024, Falcon-512 | NTRU lattice problems |
-| Lattice (Module-LWE) | ML-DSA-65, ML-DSA-87, ML-DSA-44 | Module Learning With Errors |
-| Hash-based | SPHINCS+-256f, SLH-DSA-256f, SPHINCS+-128f, SLH-DSA-128f | Hash function security (minimal assumptions) |
+| Lattice (Module-LWE) | ML-DSA-87, ML-DSA-65, ML-DSA-44 | Module Learning With Errors |
+| Hash-based | SPHINCS+, SLH-DSA | Hash function security |
 | Multivariate | MAYO-2, MAYO-3, MAYO-5 | Oil-and-vinegar |
-
-**Recommended multi-family set:** `ssh-falcon1024` + `ssh-mldsa-65` + `ssh-sphincssha2256fsimple`
-
-### SLH-DSA (FIPS 205 standardised)
-
-SLH-DSA is the NIST-standardised name for SPHINCS+ (FIPS 205). The `ssh-slhdsa-*` variants are available in liboqs >= 0.12.0 and serve as a **fallback** if the SPHINCS+ names change in future OQS-OpenSSH releases. Both refer to the same underlying algorithm.
-
-### Guidance
-
-- **For most deployments:** `ssh-falcon1024` (Level 5, fast, compact)
-- **If you want a NIST standard:** `ssh-mldsa-65` (FIPS 204)
-- **If you distrust lattice math:** `ssh-sphincssha2256fsimple` or `ssh-slhdsa-sha2-256f` (hash-based, orthogonal assumption)
-- **For constrained bandwidth:** `ssh-falcon512` (Level 1 -- only use if Level 5 is genuinely impractical)
-- **For multi-family diversification:** deploy Falcon-1024 + ML-DSA-65 + SPHINCS+-256f across your infrastructure
-
-Avoid mixing security levels across client and server. A Level-1 client key is the weakest link even when the server is configured for Level 5.
 
 ---
 
 ## Key management
 
-### Private key permissions
+### Master key (OTK-PQ)
 
-Private keys **must** have permissions `600`. The toolkit enforces this on generation and warns on weaker permissions.
+- **Never share the master private key.** It is the root of trust.
+- **Protect with a passphrase.** The generation wizard prompts for this.
+- **Verify enrollment out-of-band.** Compare fingerprints between client and server.
+- **Rotate annually** or immediately upon suspected compromise.
+- **Archive old master keys** — the rotation tool archives automatically.
 
-```bash
-chmod 600 ~/.ssh/id_ssh-falcon1024
-```
+### Standard PQ keys (bootstrap)
 
-### Passphrase protection
+- Private keys must have permissions `600`
+- Protect with a passphrase
+- Generate distinct key pairs per purpose
+- Verify host key fingerprints on first connection
 
-Protect private keys with a passphrase. During key generation you are prompted:
+### Permissions
 
-```
-Protect the new key with a passphrase? (y/N):
-```
+| File | Required |
+|------|----------|
+| Master private key | `600` |
+| Master public key | `644` |
+| OTK directories | `700` |
+| Session keys | `600` (auto-enforced, auto-destroyed) |
+| Revocation ledger | `600` |
 
-Use `ssh-agent` to avoid repeated passphrase entry:
+---
 
-```bash
-eval "$(build/bin/ssh-agent -s)"
-build/bin/ssh-add ~/.ssh/id_ssh-falcon1024
-```
+## OTK-PQ operational security
 
-### Key uniqueness
+### Nonce validation
 
-Generate distinct key pairs for distinct purposes (personal workstations, CI/CD, jump hosts). Do not share private keys between users or machines.
+Every session bundle includes a nonce (timestamp + 32 bytes CSPRNG). The server rejects bundles with:
+- Timestamps in the future (clock skew)
+- Timestamps older than `OTK_NONCE_MAX_AGE` (default 300 seconds)
+- Non-numeric or malformed timestamps
 
-### Known hosts verification
+**Clock synchronisation:** ensure client and server clocks are synchronised within `OTK_NONCE_MAX_AGE` seconds. Use NTP.
 
-On first connection to a server, verify the host key fingerprint out-of-band (e.g., from the server console) before accepting it. The health check and debug tools print the current server fingerprint to aid verification.
+### Revocation ledger
+
+- **Location:** `build/etc/otk/ledger/revocation.ledger`
+- **Growth:** one entry per session (~80 bytes). At 100 sessions/day, ~2.8 KB/day, ~1 MB/year.
+- **Pruning:** entries older than `OTK_LEDGER_PRUNE_DAYS` (default 7) are safe to remove since nonce validation would reject them anyway.
+- **Concurrency:** `flock` exclusive lock prevents corruption from simultaneous sessions.
+- **Maximum size:** `OTK_LEDGER_MAX_ENTRIES` (default 100,000) triggers a pruning warning.
+
+### Secure destruction
+
+Session key material is destroyed using:
+1. **shred** — multi-pass random overwrite + zero pass + unlink (preferred)
+2. **Manual overwrite** — `dd` from `/dev/urandom` (fallback if shred unavailable)
+3. **Verification** — post-destruction check confirms no files remain
+
+Configure the number of overwrite passes with `OTK_SHRED_PASSES` (default 3).
+
+### Bootstrap connection security
+
+OTK-PQ uses an existing PQ or classical key to push the session bundle to the server. This "bootstrap" connection:
+- Must use PQ KEX algorithms (configured automatically)
+- Should use a key that is already enrolled via standard `authorized_keys`
+- Is separate from the ephemeral session — the session key is what authenticates the actual connection
 
 ---
 
 ## Server hardening
 
-### Additional `sshd_config` directives
-
-The generated `sshd_config` applies conservative defaults. Recommended additions:
+### sshd_config recommendations
 
 ```
-# Disable password authentication entirely
 PasswordAuthentication no
 ChallengeResponseAuthentication no
 KbdInteractiveAuthentication no
-
-# Restrict to specific users
 AllowUsers alice bob
-
-# Idle session timeout
 ClientAliveInterval 300
 ClientAliveCountMax 2
-
-# Bind to a specific interface (if multi-homed)
-ListenAddress 192.168.1.10
-```
-
-Edit `build/etc/sshd_config`, then validate:
-
-```bash
-bash server/tools/diagnostics.sh
+PermitRootLogin no
 ```
 
 ### Firewall
-
-Restrict SSH access to known source IP ranges:
 
 ```bash
 sudo ufw allow from 192.168.0.0/24 to any port 22
 sudo ufw deny 22
 ```
 
-### Non-standard port
+### OTK enrollment security
 
-Running the post-quantum sshd on a non-standard port reduces automated scanner noise. Edit the `Port` directive in `build/etc/sshd_config`, update the firewall, and inform clients.
-
-### Host key rotation
-
-Rotate the server's host key periodically or after a suspected compromise. After regeneration, distribute the new fingerprint to all clients out-of-band and ask them to remove the old known_hosts entry:
-
-```bash
-build/bin/ssh-keygen -R <server_host>
-```
+- Verify master key fingerprints out-of-band before enrolling
+- Review enrolled clients periodically: `bash server/otk/otk_server.sh list`
+- Revoke compromised clients immediately: `bash server/otk/otk_server.sh revoke <name>`
+- Prune the revocation ledger periodically: `bash server/otk/revocation_ledger.sh prune`
 
 ---
 
@@ -185,279 +245,165 @@ build/bin/ssh-keygen -R <server_host>
 
 ### SSH config alias
 
-Create or extend `~/.ssh/config`:
-
 ```
-Host pqserver
+Host pqserver-otk
     HostName               192.168.1.10
     User                   alice
     Port                   22
     IdentityFile           ~/.ssh/id_ssh-falcon1024
-    HostKeyAlgorithms      ssh-falcon1024
-    PubkeyAcceptedKeyTypes ssh-falcon1024
-    KexAlgorithms          mlkem1024nistp384-sha384,mlkem768x25519-sha256,mlkem768nistp256-sha256,mlkem1024-sha384,mlkem768-sha256
+    HostKeyAlgorithms      ssh-falcon1024,ssh-mldsa-87
+    PubkeyAcceptedKeyTypes ssh-falcon1024,ssh-mldsa-87
+    KexAlgorithms          mlkem1024nistp384-sha384,mlkem768x25519-sha256,curve25519-sha256
 ```
 
-For a hybrid server that also accepts classical clients, append the classical fallback KEX:
+### Master key protection
 
-```
-Host pqserver-hybrid
-    HostName               192.168.1.10
-    User                   alice
-    Port                   22
-    IdentityFile           ~/.ssh/id_ssh-falcon1024
-    HostKeyAlgorithms      ssh-falcon1024,ssh-ed25519,rsa-sha2-512,rsa-sha2-256
-    PubkeyAcceptedKeyTypes ssh-falcon1024,ssh-ed25519,rsa-sha2-512,rsa-sha2-256
-    KexAlgorithms          mlkem1024nistp384-sha384,mlkem768x25519-sha256,mlkem768nistp256-sha256,mlkem1024-sha384,mlkem768-sha256,curve25519-sha256,diffie-hellman-group16-sha512
-```
-
-Then connect with:
-```bash
-build/bin/ssh pqserver
-```
-
-### Authorized keys audit
-
-Periodically review `~/.ssh/authorized_keys` on every server you have access to and remove stale entries. Use `client/key_rotation.sh` to retire old keys cleanly.
-
-### known_hosts hygiene
-
-Remove stale host entries when a server is decommissioned:
-
-```bash
-build/bin/ssh-keygen -R old-server.example.com
-```
+- Use passphrase protection on the master key
+- Store on encrypted filesystem where possible
+- Consider hardware-backed key storage (TPM / Secure Enclave) for high-security deployments
 
 ---
 
 ## Backup security
 
-Backup files produced by `client/backup.sh` are encrypted with AES-256-CBC (PBKDF2, 600,000 iterations). They are as sensitive as the private keys they contain.
+Backup files from `client/backup.sh` are encrypted with AES-256-CBC (PBKDF2, 600,000 iterations).
 
-The passphrase is written to a `chmod 600` temp file immediately, then the in-memory variable is cleared with `unset` before the encryption command runs. The temp file is removed unconditionally via a `RETURN` trap. This minimises the window during which the passphrase is recoverable from process memory or `/proc/<pid>/cmdline`.
-
-- Store backups in an **offline** location (encrypted USB, offline cold storage).
-- Never store a backup and its passphrase together.
-- Test restoration periodically.
-- After key rotation, create a new backup and securely destroy the old one.
+- Store backups offline (encrypted USB, cold storage)
+- Never store a backup and its passphrase together
+- After master key rotation, create a new backup and destroy the old one
+- OTK session keys are ephemeral and should NOT be backed up (they are destroyed by design)
 
 ---
 
 ## Key rotation policy
 
-| Scenario | Rotate every |
-|----------|-------------|
-| Personal / low-risk | 6 months |
-| Enterprise / privileged access | 90 days |
-| CI/CD automation keys | 90 days (enforced) |
+### Master key rotation
+
+| Scenario | Rotate |
+|----------|--------|
+| Standard | Annually (`OTK_MASTER_MAX_AGE_DAYS=365`) |
 | Post suspected compromise | Immediately |
+| Regulatory requirement | Per policy |
 
-The rotation tool (`client/key_rotation.sh`) enforces a **90-day maximum key age** by default (configurable via `KEY_MAX_AGE_DAYS`). When a key exceeds this age, rotation proceeds automatically. Keys within the policy window prompt for confirmation.
+After rotation: re-enroll the new master public key on all servers.
 
-After rotation, the tool **verifies the old key is rejected** by the server — not just that the new key works. This ensures stale credentials are truly invalidated.
+### Standard PQ key rotation
 
-For automated environments, use `docs/examples/automated_key_rotation.sh` in a cron job:
-
-```bash
-# Rotate every 90 days — crontab entry
-0 3 1 */3 * EVAEMON_SERVER_HOST=prod.example.com EVAEMON_ALGORITHM=ssh-falcon1024 bash /path/to/docs/examples/automated_key_rotation.sh
-```
-
----
-
-## Key migration (classical to post-quantum)
-
-Use `client/migrate_keys.sh` to scan a server's `~/.ssh/authorized_keys` for classical (non-PQ) key types and migrate them.
-
-### What it detects
-
-Classical key types flagged for migration:
-- `ssh-rsa` (vulnerable to Shor's algorithm)
-- `ssh-dss` (deprecated, vulnerable)
-- `ecdsa-sha2-*` (vulnerable to Shor's algorithm)
-- `ssh-ed25519` (vulnerable to Shor's algorithm)
-
-### Usage
-
-```bash
-# Scan a remote server
-bash client/migrate_keys.sh
-
-# Scan local authorized_keys only
-bash client/migrate_keys.sh --local
-```
-
-The tool will:
-1. Fetch and scan `~/.ssh/authorized_keys` from the server
-2. Report which keys are classical vs post-quantum
-3. Offer to remove all classical keys (with server-side backup)
-4. Verify the PQ key still authenticates after migration
+| Scenario | Rotate |
+|----------|--------|
+| Personal / low-risk | 6 months |
+| Enterprise | 90 days (enforced by `KEY_MAX_AGE_DAYS`) |
+| CI/CD automation | 90 days |
+| Post compromise | Immediately |
 
 ---
 
-## PQ-only test mode
+## Algorithm performance
 
-For test/staging servers, `server/pq_only_testmode.sh` configures a **pure post-quantum sshd** that rejects all classical algorithms.
+### Key and signature sizes
 
-### When to use
+| Algorithm | Public key | Signature | Level |
+|-----------|-----------|-----------|-------|
+| Ed25519 | 32 B | 64 B | N/A |
+| `ssh-falcon1024` | 1,793 B | 1,280 B | 5 |
+| `ssh-mldsa-87` (ML-DSA-87) | 2,592 B | 4,627 B | 5 |
+| `ssh-sphincssha2256fsimple` | 64 B | 29,792 B | 5 |
 
-- Proving PQ-only viability before production rollout
-- CI/CD pipeline testing with PQ deploy keys
-- Security audits requiring PQ-only compliance
+### OTK-PQ overhead
 
-### What it does
+Per-session overhead from the OTK-PQ architecture:
 
-1. Generates PQ-only host keys (no Ed25519/RSA)
-2. Writes `sshd_config` with PQ-only KEX and PQ-only authentication
-3. Configures firewall rules (ufw or iptables) for the dedicated port
-4. Creates a separate systemd service (`evaemon-pqonly-sshd`)
-5. Prints a test plan for CI/CD verification
+| Operation | Approximate time |
+|-----------|-----------------|
+| Session key generation (Ed25519 + ML-DSA-87) | ~15 ms |
+| Master key signing | ~0.5 ms |
+| Session ID computation (SHA3-256) | < 1 ms |
+| Nonce generation | < 1 ms |
+| Secure destruction (3-pass shred) | ~5 ms |
+| **Total OTK overhead** | **~25 ms per session** |
 
-### Usage
-
-```bash
-sudo bash server/pq_only_testmode.sh
-```
-
-Default port is 2222. Classical SSH clients **cannot** connect.
-
----
-
-## Algorithm performance benchmark
-
-Reference measurements for the most commonly deployed algorithms. Exact numbers
-depend on hardware, compiler, and liboqs version; use `client/tools/performance_test.sh`
-to generate numbers for your environment.
-
-### Signature size and key size
-
-| Algorithm | Public key | Signature | Private key | NIST Level |
-|-----------|-----------|-----------|-------------|-----------|
-| Ed25519 (classical) | 32 B | 64 B | 64 B | N/A |
-| `ssh-falcon1024` | 1,793 B | 1,280 B | 2,305 B | 5 |
-| `ssh-mldsa-65` (ML-DSA-65) | 1,952 B | 3,309 B | 4,032 B | 3 |
-| `ssh-mldsa-87` (ML-DSA-87) | 2,592 B | 4,627 B | 4,896 B | 5 |
-| `ssh-sphincssha2256fsimple` | 64 B | 29,792 B | 128 B | 5 |
-| `ssh-slhdsa-sha2-256f` | 64 B | 29,792 B | 128 B | 5 |
-| `ssh-sphincssha2128fsimple` | 32 B | 17,088 B | 64 B | 1 |
-
-### Signing and verification speed
-
-Measured on a modern x86\_64 server (single core). Times are per-operation averages.
-
-| Algorithm | Sign | Verify | Keygen |
-|-----------|------|--------|--------|
-| Ed25519 (classical) | ~0.03 ms | ~0.07 ms | ~0.03 ms |
-| `ssh-falcon1024` | ~0.6 ms | ~0.1 ms | ~12 ms |
-| `ssh-mldsa-65` (ML-DSA-65) | ~0.3 ms | ~0.3 ms | ~0.3 ms |
-| `ssh-mldsa-87` (ML-DSA-87) | ~0.5 ms | ~0.5 ms | ~0.5 ms |
-| `ssh-sphincssha2256fsimple` | ~160 ms | ~5 ms | ~2 ms |
-| `ssh-slhdsa-sha2-256f` | ~160 ms | ~5 ms | ~2 ms |
-| `ssh-sphincssha2128fsimple` | ~8 ms | ~0.4 ms | ~0.3 ms |
-
-### SSH handshake latency impact
-
-Approximate overhead compared to Ed25519 on a local network:
-
-| Algorithm | Handshake overhead | Practical impact |
-|-----------|-------------------|------------------|
-| `ssh-falcon1024` | +2-5 ms | Negligible -- fastest PQ option |
-| `ssh-mldsa-65` | +5-15 ms | Barely noticeable |
-| `ssh-mldsa-87` | +10-25 ms | Acceptable for all workloads |
-| `ssh-sphincssha2256fsimple` | +150-300 ms | Noticeable on interactive sessions |
-| `ssh-sphincssha2128fsimple` | +10-30 ms | Acceptable |
-
-### Performance guidance
-
-- **Latency-sensitive** (interactive sessions, CI/CD): Use `ssh-falcon1024` or `ssh-mldsa-65`.
-  Falcon has the fastest verification; ML-DSA-65 has the fastest signing.
-- **Bandwidth-constrained**: `ssh-falcon1024` has the smallest combined (pubkey + signature)
-  footprint of any Level 5 algorithm. Avoid SPHINCS+ unless bandwidth is not a concern.
-- **Maximum security margin**: `ssh-sphincssha2256fsimple` relies only on hash function security.
-  The signing overhead (~160 ms) is acceptable for key rotation and CI/CD but noticeable for
-  interactive sessions.
-- **Balanced multi-family**: Deploy `ssh-falcon1024` for daily use and
-  `ssh-sphincssha2256fsimple` as a standby fallback -- you get speed AND independence from
-  lattice assumptions.
-
-Run `bash client/tools/performance_test.sh` to generate exact numbers for your hardware.
+This overhead is negligible for interactive SSH sessions.
 
 ---
 
-## CVE advisories and dependency vulnerabilities
-
-The following CVEs affect components that Evaemon builds from source.
-Ensure you pull up-to-date source (or pin to the versions noted) before building.
+## CVE advisories
 
 ### liboqs
 
-| CVE | Severity | Affected versions | Fixed in | Description |
-|-----|----------|-------------------|----------|-------------|
-| CVE-2024-36405 | Moderate | < 0.10.1 | 0.10.1 | KyberSlash: control-flow timing leak in Kyber/ML-KEM decapsulation when compiled with Clang 15–18 at -O1/-Os. Enables secret-key recovery. |
-| CVE-2024-54137 | Moderate | < 0.12.0 | 0.12.0 | HQC decapsulation returns incorrect shared secret on invalid ciphertext. |
-| CVE-2025-48946 | Moderate | < 0.14.0 | 0.14.0 | HQC design flaw: large number of malformed ciphertexts share the same implicit rejection value. |
-| CVE-2025-52473 | Moderate | < 0.14.0 | 0.14.0 | HQC secret-dependent branches when compiled with Clang above -O0. |
+| CVE | Fixed in | Description |
+|-----|----------|-------------|
+| CVE-2024-36405 | 0.10.1 | KyberSlash: timing leak in Kyber/ML-KEM decapsulation |
+| CVE-2024-54137 | 0.12.0 | HQC incorrect shared secret on invalid ciphertext |
+| CVE-2025-48946 | 0.14.0 | HQC implicit rejection collision |
+| CVE-2025-52473 | 0.14.0 | HQC secret-dependent branches |
 
-> **Note:** HQC is not used by any of the signature algorithms in this toolkit's
-> default `ALGORITHMS` list, but it is present in the liboqs build. CVE-2024-36405
-> (KyberSlash) **does** apply to the Kyber-based `KEX_ALGORITHMS` used for session
-> key exchange.
+**Recommendation:** build against liboqs `main` (>= 0.14.0) or the latest tagged release.
 
-**Recommendation:** build against liboqs `main` (≥ 0.14.0) or the latest tagged release.
-
-### OQS-OpenSSH (upstream OpenSSH inherited CVEs)
-
-OQS-OpenSSH is a fork of upstream OpenSSH. The following upstream CVEs may be
-present depending on the base version included in the OQS fork branch:
+### OQS-OpenSSH (upstream inherited)
 
 | CVE | CVSS | Description |
 |-----|------|-------------|
-| CVE-2024-6387 | 8.1 Critical | "regreSSHion" — unauthenticated RCE as root via signal-handler race in sshd on glibc Linux (OpenSSH 8.5p1–9.7p1). |
-| CVE-2024-6409 | 7.0 High | Race condition RCE in privilege-separation child (OpenSSH 8.7–8.8, RHEL/Fedora). |
-| CVE-2025-26465 | 6.8 Medium | Client MitM if `VerifyHostKeyDNS=yes` (OpenSSH 6.8p1–9.9p1). |
-| CVE-2025-26466 | 5.9 Medium | Pre-authentication CPU/memory DoS (OpenSSH 9.5p1–9.9p1). Fixed in 9.9p2. |
+| CVE-2024-6387 | 8.1 | "regreSSHion" — unauthenticated RCE |
+| CVE-2024-6409 | 7.0 | Race condition RCE in privsep child |
+| CVE-2025-26465 | 6.8 | Client MitM if `VerifyHostKeyDNS=yes` |
+| CVE-2025-26466 | 5.9 | Pre-auth CPU/memory DoS |
 
-> **Note:** The OQS-OpenSSH repository (`OQS-v9` branch) is archived and no longer
-> actively maintained by the Open Quantum Safe project. It may not have received
-> patches for all upstream CVEs. **This toolkit is intended for research and
-> evaluation, not production use with sensitive data.**
+> The OQS-OpenSSH repository (`OQS-v9` branch) is archived. It may not have received patches for all upstream CVEs.
 
 ---
 
-## Known limitations and caveats
+## Known limitations
 
-1. **OQS implementations are not yet FIPS-validated.** The underlying liboqs library is research-grade. Await formal FIPS 204 certification for regulated environments.
+1. **OQS implementations are not yet FIPS-validated.** Await formal FIPS 204/203 certification for regulated environments.
 
-2. **PQ KEX is hybrid, not pure-PQ by default.** The recommended KEX algorithms (e.g. `mlkem1024nistp384-sha384`) combine a classical elliptic-curve exchange with ML-KEM. Security holds as long as either component remains unbroken. Pure-PQ KEX options (`mlkem1024-sha384`, `mlkem768-sha256`) are available in `shared/config.sh` but sacrifice compatibility with clients that lack ML-KEM support. For pure-PQ testing, use `server/pq_only_testmode.sh`.
+2. **Initial enrollment must be secure.** If the first master key transfer is compromised, the system is broken. This is a bootstrapping problem common to all PKI.
 
-3. **System SSH is unmodified.** Both standard and post-quantum sshd run simultaneously by default. Ensure classical SSH is also hardened or firewalled.
+3. **Revocation ledger growth.** The server must maintain a record of used keys. Mitigated by time-based pruning (7-day default).
 
-4. **Host key compromise is not automatically detected.** Rotate host keys immediately upon suspicion of compromise.
+4. **Client device compromise.** If the master private key is extracted, the system is broken. Hardware-backed storage mitigates this.
 
-5. **Algorithm agility.** If a PQ algorithm is later found vulnerable, rotating to a different one requires reconfiguring both server and all clients. Maintain a record of which key type each client uses.
+5. **Computational overhead.** Generating fresh hybrid keys per session has a cost (~25 ms). Acceptable for SSH, potentially challenging for high-frequency connections.
+
+6. **System SSH is unmodified.** Both standard and post-quantum sshd run simultaneously by default. Firewall the classical SSH port.
+
+7. **OQS-OpenSSH is archived.** The upstream project is no longer actively maintained. This toolkit is built on a research-grade fork.
 
 ---
 
 ## Incident response
 
-### Suspected private key compromise
+### Suspected master key compromise
 
-1. Run key rotation immediately:
+1. **Immediately rotate the master key:**
    ```bash
-   bash client/key_rotation.sh
+   bash client/otk/master_key.sh rotate
    ```
-2. Confirm the old key is removed from all servers' `authorized_keys`.
-3. Review server logs for unusual activity:
+2. **Re-enroll on all servers:**
    ```bash
-   bash server/monitoring.sh
+   bash client/otk/master_key.sh export > new_master.pub
+   bash server/otk/otk_server.sh enroll alice new_master.pub
    ```
-4. Rotate the server's host key if the server itself may be compromised.
+3. **Revoke the old enrollment** (if a separate client name was used)
+4. **Review server logs** for unusual session activity
+
+### Suspected session key interception
+
+No action required — the session key is already destroyed and revoked. An intercepted session key has zero value.
 
 ### Suspected server compromise
 
-1. Stop the post-quantum sshd:
-   ```bash
-   sudo systemctl stop evaemon-sshd.service
-   ```
-2. Use out-of-band console access for investigation -- do not SSH in.
-3. After remediation, rebuild from scratch, regenerate all host keys, and rotate all client keys that had access.
+1. Stop the sshd: `sudo systemctl stop evaemon-sshd.service`
+2. Use out-of-band console access for investigation
+3. After remediation:
+   - Wipe and rebuild the server
+   - Re-initialize the OTK-PQ server: `bash server/otk/otk_server.sh setup`
+   - Re-enroll all client master keys
+   - Rotate all client master keys (optional but recommended)
+
+### Stale session cleanup
+
+If sessions were interrupted (crash, network failure), clean up residual key material:
+
+```bash
+bash client/otk/otk_lifecycle.sh cleanup
+```
