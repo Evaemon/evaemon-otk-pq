@@ -209,6 +209,19 @@ OTK-PQ uses an existing PQ or classical key to push the session bundle to the se
 - Should use a key that is already enrolled via standard `authorized_keys`
 - Is separate from the ephemeral session — the session key is what authenticates the actual connection
 
+### StrictHostKeyChecking behaviour
+
+OTK-PQ uses `StrictHostKeyChecking=accept-new` for both the bootstrap push and the ephemeral session connection. This means:
+- **First connection to a new host:** the server's host key is automatically accepted and saved to `known_hosts`. This is a **TOFU (Trust On First Use)** model — an attacker performing a MitM during the *very first* connection can substitute their own host key.
+- **Subsequent connections:** rejected if the host key changes (standard SSH behaviour).
+
+**Mitigation:** before the first OTK-PQ connection, manually verify the server's host key fingerprint via an out-of-band channel (e.g. console access), or pre-populate `known_hosts`:
+```bash
+# Pre-populate the server's host key fingerprint
+ssh-keyscan -H <server_host> >> ~/.ssh/known_hosts
+```
+After pre-populating, you can set `StrictHostKeyChecking=yes` in your SSH config for maximum security.
+
 ---
 
 ## Server hardening

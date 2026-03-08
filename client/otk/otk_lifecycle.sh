@@ -37,9 +37,13 @@ _secure_delete() {
         if (( file_size > 0 )); then
             local pass
             for (( pass=0; pass < OTK_SHRED_PASSES; pass++ )); do
-                dd if=/dev/urandom of="${file}" bs=1 count="${file_size}" conv=notrunc 2>/dev/null || true
+                if ! dd if=/dev/urandom of="${file}" bs=1 count="${file_size}" conv=notrunc 2>/dev/null; then
+                    log_warn "Secure overwrite failed (pass $((pass+1))) for ${file} — disk full or I/O error"
+                    break
+                fi
             done
-            dd if=/dev/zero of="${file}" bs=1 count="${file_size}" conv=notrunc 2>/dev/null || true
+            dd if=/dev/zero of="${file}" bs=1 count="${file_size}" conv=notrunc 2>/dev/null || \
+                log_warn "Zero-pass overwrite failed for ${file} — disk full or I/O error"
         fi
         rm -f "${file}"
     fi

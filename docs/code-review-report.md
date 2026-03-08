@@ -122,27 +122,27 @@ Het evaemon-otk-pq project is een goed gestructureerd en veilig systeem voor pos
 
 #### 7. Lange Functies Opsplitsen
 - `otk_connect()` is 100+ regels — kan opgesplitst worden in kleinere functies zoals `_build_session_bundle()`, `_execute_remote_verification()`, `_cleanup_session()`.
-- **Status:** Open
+- **Status:** Open (refactor — geen security impact)
 
 #### 8. Disk-Full Handling bij Secure Delete
 - `_secure_delete()` faalt stil als de disk vol is tijdens multi-pass overwrite.
 - **Remedie:** Voeg check + warning toe.
-- **Status:** Open
+- **Status:** Opgelost ✅
 
 #### 9. Interrupted Master Key Generatie
 - Als `ssh-keygen` halverwege wordt afgebroken, kan een partieel key-bestand achterblijven.
 - **Remedie:** Check op incomplete bestanden bij startup.
-- **Status:** Open
+- **Status:** Opgelost ✅
 
 #### 10. Revocation Ledger Schaalbaarheid
 - Default max: 100.000 entries met 10s flock timeout.
 - Bij hoge load (>1000 concurrent sessions) kan lock contention optreden.
 - **Overweging:** Database backend of sharding voor productie-omgevingen.
-- **Status:** Open
+- **Status:** Open (architectuur — niet van toepassing op huidige use case)
 
 #### 11. StrictHostKeyChecking=accept-new Documenteren
 - Auto-accept van onbekende hosts is verwacht gedrag voor OTK, maar moet duidelijker gedocumenteerd worden (MITM risico bij eerste connectie).
-- **Status:** Open
+- **Status:** Opgelost ✅
 
 #### 12. Exit Codes Documenteren
 - Functies retourneren 0/1 maar de betekenis is niet altijd gedocumenteerd in commentaar.

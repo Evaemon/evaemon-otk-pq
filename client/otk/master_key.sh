@@ -47,6 +47,44 @@ _ensure_otk_dirs() {
     fi
 }
 
+# ── Incomplete Key Detection ─────────────────────────────────────────────────
+
+# _check_incomplete_keys
+# Detect and warn about incomplete master key files left behind by interrupted
+# key generation (e.g. ssh-keygen killed mid-operation).
+_check_incomplete_keys() {
+    local key_path="${OTK_MASTER_DIR}/${OTK_MASTER_SIGN_KEY}"
+    local pub_path="${OTK_MASTER_DIR}/${OTK_MASTER_SIGN_PUB}"
+
+    # Case 1: Private key exists but no public key
+    if [[ -f "${key_path}" && ! -f "${pub_path}" ]]; then
+        log_warn "Incomplete master key detected: private key exists but public key is missing"
+        log_warn "This may be caused by an interrupted key generation"
+        log_warn "Remove with: rm -f '${key_path}' and regenerate"
+        return 1
+    fi
+
+    # Case 2: Public key exists but no private key
+    if [[ ! -f "${key_path}" && -f "${pub_path}" ]]; then
+        log_warn "Orphaned master public key detected: no matching private key"
+        log_warn "Remove with: rm -f '${pub_path}' and regenerate"
+        return 1
+    fi
+
+    # Case 3: Both exist — check if private key has reasonable size (not truncated)
+    if [[ -f "${key_path}" ]]; then
+        local key_size
+        key_size="$(wc -c < "${key_path}" 2>/dev/null || echo 0)"
+        if (( key_size < 100 )); then
+            log_warn "Master private key appears truncated (${key_size} bytes)"
+            log_warn "This may be caused by an interrupted key generation"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
 # ── Master Key Generation ────────────────────────────────────────────────────
 
 # generate_master_key [--force]
@@ -125,6 +163,11 @@ verify_master_key() {
     local errors=0
 
     log_section "OTK-PQ Layer 1 — Master Key Verification"
+
+    # Check for incomplete/corrupted keys from interrupted generation
+    if ! _check_incomplete_keys; then
+        (( errors++ )) || true
+    fi
 
     # Check private key exists
     if [[ ! -f "${key_path}" ]]; then
