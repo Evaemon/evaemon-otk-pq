@@ -11,7 +11,7 @@ Built on top of the [Evaemon](https://github.com/Yarpii/Evaemon) post-quantum SS
 ## Quick start
 
 ```bash
-git clone https://github.com/Yarpii/evaemon-otk-pq.git
+git clone https://github.com/Evaemon/evaemon-otk-pq.git
 cd evaemon-otk-pq
 sudo bash wizard.sh
 ```
