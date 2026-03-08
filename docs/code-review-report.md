@@ -95,26 +95,26 @@ Het evaemon-otk-pq project is een goed gestructureerd en veilig systeem voor pos
 - **Ernst:** Medium
 - **Probleem:** `mktemp` wordt gebruikt maar er is geen `trap` voor cleanup bij crash, kill, of interrupt.
 - **Remedie:** Voeg `trap 'rm -f "${tmp_file}"' EXIT RETURN` toe direct na elke `mktemp` aanroep.
-- **Status:** Open
+- **Status:** Opgelost ✅
 
 #### 4. Base64 Encoding Compatibiliteit (GNU vs BSD)
 - **Bestand:** `client/otk/otk_connect.sh`, regel ~166
 - **Ernst:** Medium
 - **Probleem:** Fallback van `base64 -w 0` (GNU) naar `base64` (BSD) kan line-wrapping produceren, wat signature verificatie kan breken.
 - **Remedie:** Gebruik `base64 -w 0 2>/dev/null || base64 | tr -d '\n'` als portable oplossing.
-- **Status:** Open
+- **Status:** Opgelost ✅
 
 #### 5. Betere Foutmeldingen bij Nonce Validatie / Clock Skew
 - **Probleem:** Server weigert sessions bij klok-verschil >300s, maar de foutmelding maakt niet duidelijk dat het om clock skew gaat.
 - **Remedie:** Specifieke melding: "Clock skew detected: client time differs by Xs from server".
-- **Status:** Open
+- **Status:** Opgelost ✅
 
 #### 6. Validatie van Session Key Materiaal op Server
 - **Bestand:** `server/otk/otk_server.sh`, regels ~159-249
 - **Ernst:** Medium
 - **Probleem:** Session bundle verificatie controleert niet of public keys het verwachte formaat hebben voordat ze geschreven worden.
 - **Remedie:** Regex-check op key formaat (bijv. `ssh-mldsa-87 AAAA...`).
-- **Status:** Open
+- **Status:** Opgelost ✅
 
 ---
 
