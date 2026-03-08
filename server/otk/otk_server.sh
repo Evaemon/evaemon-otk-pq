@@ -192,6 +192,23 @@ verify_session_bundle() {
         fi
     done
 
+    # Validate that public key files contain properly formatted SSH keys
+    for key_file in "session_key.pub" "session_pq_key.pub"; do
+        local key_content
+        key_content="$(cat "${export_dir}/${key_file}")"
+        # SSH public keys must have at least 2 space-separated fields: type and base64 data
+        if [[ -z "${key_content}" ]] || (( $(echo "${key_content}" | awk '{print NF}') < 2 )); then
+            log_error "Invalid session key format in ${key_file}: expected 'type base64data [comment]'"
+            return 1
+        fi
+        # Key type must start with ssh- or ecdsa- (covers ssh-ed25519, ssh-mldsa87, ecdsa-*, etc.)
+        local key_type="${key_content%% *}"
+        if [[ ! "${key_type}" =~ ^(ssh-|ecdsa-) ]]; then
+            log_error "Unrecognized key type '${key_type}' in ${key_file}"
+            return 1
+        fi
+    done
+
     local session_id
     session_id="$(cat "${export_dir}/session_id")"
     local nonce
@@ -218,12 +235,17 @@ verify_session_bundle() {
     fi
 
     if (( nonce_age < 0 )); then
-        log_error "Nonce timestamp is in the future (clock skew: ${nonce_age}s)"
+        local skew=$(( -nonce_age ))
+        log_error "Clock skew detected: client clock is ${skew}s ahead of server"
+        log_error "Sync clocks with NTP or increase OTK_NONCE_MAX_AGE (current: ${OTK_NONCE_MAX_AGE}s)"
         return 1
     fi
 
     if (( nonce_age > OTK_NONCE_MAX_AGE )); then
-        log_error "Nonce expired: ${nonce_age}s old (max: ${OTK_NONCE_MAX_AGE}s)"
+        log_error "Session nonce expired: age=${nonce_age}s exceeds max=${OTK_NONCE_MAX_AGE}s"
+        if (( nonce_age > 3600 )); then
+            log_error "Clock skew detected: client clock is ${nonce_age}s behind server — sync with NTP"
+        fi
         return 1
     fi
 
