@@ -1,0 +1,61 @@
+# ~/.ssh/config snippet for post-quantum SSH connections
+#
+# Copy the relevant Host block(s) into your ~/.ssh/config file.
+# Connections are made with:
+#
+#   /path/to/Evaemon/build/bin/ssh <alias>
+#
+# Replace placeholders (HOSTNAME, USER, PORT, ALGORITHM) with real values.
+# The algorithm in HostKeyAlgorithms and PubkeyAcceptedKeyTypes must match
+# what the server was configured with (see server/server.sh).
+
+# ── Falcon-1024 (NIST Level 5, recommended) ───────────────────────────────────
+Host evaemon-falcon1024
+    HostName          192.168.1.10
+    User              alice
+    Port              22
+    IdentityFile      ~/.ssh/id_ssh-falcon1024
+    HostKeyAlgorithms ssh-falcon1024
+    PubkeyAcceptedKeyTypes ssh-falcon1024
+    # Reduce timeout for fast-failing on unreachable hosts
+    ConnectTimeout    10
+
+# ── ML-DSA-66 / FIPS 204 (NIST Level 3, standardised) ────────────────────────
+Host evaemon-mldsa66
+    HostName          192.168.1.11
+    User              bob
+    Port              2222
+    IdentityFile      ~/.ssh/id_ssh-mldsa66
+    HostKeyAlgorithms ssh-mldsa66
+    PubkeyAcceptedKeyTypes ssh-mldsa66
+    ConnectTimeout    10
+
+# ── SPHINCS+ SHA-256 192 (hash-based, conservative) ──────────────────────────
+Host evaemon-sphincs
+    HostName          192.168.1.12
+    User              charlie
+    Port              22
+    IdentityFile      ~/.ssh/id_ssh-sphincssha256192frobust
+    HostKeyAlgorithms ssh-sphincssha256192frobust
+    PubkeyAcceptedKeyTypes ssh-sphincssha256192frobust
+    ConnectTimeout    10
+
+# ── Jump host via a post-quantum bastion ──────────────────────────────────────
+# Connect to an internal host through a PQ-secured bastion:
+#   build/bin/ssh internal-host
+Host bastion
+    HostName          bastion.example.com
+    User              jumpuser
+    Port              22
+    IdentityFile      ~/.ssh/id_ssh-falcon1024
+    HostKeyAlgorithms ssh-falcon1024
+    PubkeyAcceptedKeyTypes ssh-falcon1024
+
+Host internal-host
+    HostName          10.0.0.50
+    User              alice
+    Port              22
+    IdentityFile      ~/.ssh/id_ssh-falcon1024
+    HostKeyAlgorithms ssh-falcon1024
+    PubkeyAcceptedKeyTypes ssh-falcon1024
+    ProxyJump         bastion

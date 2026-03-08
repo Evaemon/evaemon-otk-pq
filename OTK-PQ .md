@@ -1,0 +1,258 @@
+# Evaemon OTK-PQ — One-Time Key Post-Quantum Hybrid Authentication
+
+> *"Use it once. Then it no longer exists."*
+
+## Overview
+
+Evaemon OTK-PQ introduces a fundamentally new approach to SSH authentication by combining **one-time ephemeral session keys**, **post-quantum cryptographic anchoring**, and **hybrid classical/post-quantum verification** into a layered security architecture.
+
+Unlike traditional SSH, where a persistent key pair grants ongoing access, OTK-PQ ensures that **every session requires a unique, single-use key that is cryptographically destroyed after use**. Even if an attacker intercepts a session key, it is already worthless.
+
+---
+
+## Core Concept
+
+### The Problem with Traditional SSH Keys
+
+Traditional SSH authentication relies on persistent key pairs. Once generated, the same private key authenticates the user indefinitely. This creates several risks:
+
+- A stolen private key grants unlimited access until manually revoked
+- Key reuse across sessions creates a large attack surface over time
+- Quantum computers threaten to break classical key exchange retroactively
+- No forward secrecy at the authentication layer — compromise one key, compromise everything
+
+### The OTK-PQ Solution: Three-Layer Architecture
+
+OTK-PQ separates authentication into three distinct, independent layers:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  LAYER 1 — POST-QUANTUM MASTER KEY (Anchor)         │
+│  ─────────────────────────────────────────────────── │
+│  • Never transmitted over the network                │
+│  • Exists only on client and server                  │
+│  • Sole purpose: verify that session keys            │
+│    are legitimate                                    │
+│  • Post-quantum algorithm (e.g., ML-KEM / ML-DSA)   │
+│  • The root of trust                                 │
+└──────────────────────┬──────────────────────────────┘
+                       │ validates
+┌──────────────────────▼──────────────────────────────┐
+│  LAYER 2 — HYBRID SESSION KEY GENERATION             │
+│  ─────────────────────────────────────────────────── │
+│  • Fresh key pair generated for every session        │
+│  • Hybrid: classical (Ed25519/X25519) + post-quantum │
+│    (ML-KEM) combined                                 │
+│  • Both components must be valid — if either is      │
+│    broken, the other still protects                  │
+│  • Key is signed/verified against the Master Key     │
+└──────────────────────┬──────────────────────────────┘
+                       │ authenticates
+┌──────────────────────▼──────────────────────────────┐
+│  LAYER 3 — ONE-TIME EXECUTION & DESTRUCTION          │
+│  ─────────────────────────────────────────────────── │
+│  • Session key used exactly once                     │
+│  • After session: key is cryptographically           │
+│    invalidated on both client and server             │
+│  • Server maintains a revocation ledger —            │
+│    used keys can never be replayed                   │
+│  • No persistent session material remains            │
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
+## How It Works
+
+### 1. Initial Enrollment (One-Time Setup)
+
+During the first secure connection between client and server, the following is established:
+
+- **Master Key Pair** is generated using a post-quantum algorithm (ML-DSA-87 / ML-KEM-1024)
+- The master public key is stored on the server
+- The master private key is stored exclusively on the client in a hardware-backed secure enclave (where available)
+- **The master key never touches the network after enrollment**
+
+### 2. Session Initiation
+
+When the client wants to connect:
+
+1. **Client generates a fresh hybrid key pair:**
+   - Classical component: Ed25519 (signing) + X25519 (key exchange)
+   - Post-quantum component: ML-KEM-1024 (encapsulation)
+   - Both are ephemeral — generated in memory, never written to disk
+
+2. **Client signs the ephemeral public key with the Master Key:**
+   - The master private key creates a signature over the hybrid session public key
+   - This proves the session key was generated by the legitimate client
+
+3. **Client sends to server:**
+   - Ephemeral hybrid public key
+   - Master key signature over the ephemeral key
+   - Session nonce (timestamp + random)
+
+### 3. Server Verification
+
+The server performs a multi-step verification:
+
+1. **Check revocation ledger** — has this session key been seen before? If yes, reject immediately
+2. **Verify master key signature** — does the signature validate against the stored master public key?
+3. **Validate nonce** — is the timestamp within acceptable bounds? Is the random component unique?
+4. **If all pass** — accept the session key and proceed with hybrid key exchange
+
+### 4. Hybrid Key Exchange
+
+The actual session encryption uses both classical and post-quantum key exchange simultaneously:
+
+```
+Client                              Server
+  │                                    │
+  ├─── X25519 ephemeral public ───────►│
+  ├─── ML-KEM-1024 encapsulation ─────►│
+  │                                    │
+  │◄── X25519 ephemeral public ────────┤
+  │◄── ML-KEM-1024 ciphertext ────────┤
+  │                                    │
+  ├─ derive shared_secret_classical ───┤
+  ├─ derive shared_secret_pq ──────────┤
+  │                                    │
+  └─ session_key = KDF(classical ║ pq) ┘
+```
+
+The final session key is derived by combining **both** shared secrets through a KDF (Key Derivation Function). An attacker must break **both** classical and post-quantum components to derive the session key.
+
+### 5. Session Termination & Key Destruction
+
+Upon session close:
+
+1. Server adds the ephemeral session key hash to the **revocation ledger**
+2. Client zeroes all ephemeral key material from memory
+3. Server zeroes all ephemeral key material from memory
+4. The session key **ceases to exist** — it cannot be reconstructed
+5. Any attempt to replay the same session key is rejected by the revocation ledger
+
+---
+
+## Security Properties
+
+| Property | Traditional SSH | OTK-PQ |
+|---|---|---|
+| Key reuse | Same key indefinitely | Never — one key per session |
+| Forward secrecy | Session-level only | Authentication + session level |
+| Quantum resistance | None (RSA/Ed25519) | Hybrid classical + post-quantum |
+| Stolen key impact | Full access until revoked | Zero — key already expired |
+| Replay attacks | Possible if key stolen | Impossible — revocation ledger |
+| Master key exposure | Key is the auth key | Master key never on the wire |
+| Attack surface | Persistent | Ephemeral — exists only during session |
+
+---
+
+## Threat Model
+
+### What OTK-PQ Defends Against
+
+- **Quantum harvest attacks** — "capture now, decrypt later" is neutralized because session keys are hybrid and ephemeral; the master key is post-quantum and never transmitted
+- **Key theft** — stealing an ephemeral key after use gains nothing; it's already revoked
+- **Man-in-the-middle** — session keys are signed by the master key; MITM cannot forge the signature
+- **Replay attacks** — the revocation ledger and nonce validation prevent any key reuse
+- **Server compromise** — the server only holds the master *public* key; the private master key never leaves the client
+
+### Limitations
+
+- **Initial enrollment must be secure** — if the first key exchange is compromised, the master key is compromised. This is a bootstrapping problem common to all PKI
+- **Revocation ledger growth** — the server must maintain a record of used keys. Mitigated by time-based pruning (keys older than X are expired regardless)
+- **Client device compromise** — if the client device is fully compromised and the master private key is extracted, the system is broken. Hardware-backed key storage mitigates this
+- **Computational overhead** — generating fresh hybrid keys per session has a cost. Acceptable for SSH, potentially challenging for high-frequency connections
+
+---
+
+## Architecture Integration with Evaemon
+
+OTK-PQ is designed as a module within the Evaemon post-quantum SSH ecosystem:
+
+```
+┌──────────────────────────────────────┐
+│             EVAEMON                  │
+│                                      │
+│  ┌────────────┐  ┌────────────────┐  │
+│  │  Wizard    │  │  Key Manager   │  │
+│  │  Setup     │  │  (OTK-PQ)     │  │
+│  └────────────┘  └────────────────┘  │
+│                                      │
+│  ┌────────────┐  ┌────────────────┐  │
+│  │  Health    │  │  Revocation    │  │
+│  │  Checks   │  │  Ledger        │  │
+│  └────────────┘  └────────────────┘  │
+│                                      │
+│  ┌────────────┐  ┌────────────────┐  │
+│  │  Key       │  │  Hybrid        │  │
+│  │  Rotation  │  │  Crypto Engine │  │
+│  └────────────┘  └────────────────┘  │
+│                                      │
+└──────────────────────────────────────┘
+```
+
+- **Wizard Setup** handles initial enrollment and master key generation
+- **Key Manager (OTK-PQ)** orchestrates ephemeral key generation and verification
+- **Revocation Ledger** tracks and rejects used session keys
+- **Health Checks** verify system integrity, key freshness, and ledger consistency
+- **Key Rotation** manages master key lifecycle (periodic re-enrollment)
+- **Hybrid Crypto Engine** provides classical + post-quantum primitives
+
+---
+
+## Algorithms
+
+| Purpose | Algorithm | Standard |
+|---|---|---|
+| Master key signing | ML-DSA-87 (Dilithium) | FIPS 204 |
+| Master key encapsulation | ML-KEM-1024 (Kyber) | FIPS 203 |
+| Classical signing | Ed25519 | RFC 8032 |
+| Classical key exchange | X25519 | RFC 7748 |
+| Session KDF | HKDF-SHA-512 | RFC 5869 |
+| Nonce generation | CSPRNG + timestamp | — |
+| Revocation hashing | SHA3-256 | FIPS 202 |
+
+---
+
+## Roadmap
+
+- [ ] Core OTK-PQ key generation and verification module
+- [ ] Revocation ledger implementation with time-based pruning
+- [ ] Hybrid key exchange protocol (X25519 + ML-KEM-1024)
+- [ ] Master key signature verification (ML-DSA-87)
+- [ ] Hardware-backed key storage integration (TPM / Secure Enclave)
+- [ ] SSH protocol integration via Evaemon
+- [ ] Performance benchmarking (key generation overhead per session)
+- [ ] Formal security audit
+- [ ] Compliance assessment (FIPS, Common Criteria)
+
+---
+
+## Design Philosophy
+
+OTK-PQ is built on three principles:
+
+**Nothing persists.** Session keys exist only for the duration of a single connection. There is no key to steal because there is no key that lasts.
+
+**Trust is layered.** The master key anchors identity. The hybrid layer ensures quantum resilience. The one-time mechanism ensures temporal isolation. An attacker must defeat all three layers simultaneously.
+
+**Destruction is a feature.** In traditional systems, key destruction is an afterthought. In OTK-PQ, it is the core mechanism. The system is designed around the assumption that every key will be destroyed — the question is only whether the session completes first.
+
+---
+
+## Part of the Trednets Ecosystem
+
+Evaemon OTK-PQ is developed by **Trednets** as part of a broader technology ecosystem focused on deterministic, traceable, and resilient systems.
+
+> *Every connection is unique. Every key is temporary. Every session is final.*
+
+---
+
+## License
+
+Proprietary — Trednets B.V.
+
+## Author
+
+Yarpii — CEO, Trednets
