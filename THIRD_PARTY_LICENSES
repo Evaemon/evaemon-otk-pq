@@ -1,0 +1,9 @@
+This project may integrate or interact with third-party software.
+
+Third-party components remain subject to their original licenses.
+
+Examples include:
+- OpenSSH — BSD-style license
+- liboqs / Open Quantum Safe — MIT license
+
+See the relevant upstream projects for full licensing terms.
