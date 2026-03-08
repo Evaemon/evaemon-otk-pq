@@ -1,4 +1,5 @@
 # Evaemon OTK-PQ
+![Experimental](https://img.shields.io/badge/status-experimental-red)
 
 > *"Use it once. Then it no longer exists."*
 
