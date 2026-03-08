@@ -78,17 +78,36 @@ enroll_master_key() {
 
     chmod "${OTK_PUBLIC_KEY_PERMS}" "${enrolled_path}"
 
-    # Verify the key is readable
+    # Validate that the file contains a valid SSH public key
+    # This prevents storing corrupt or malicious files as enrolled keys
     if [[ -x "${BIN_DIR}/ssh-keygen" ]]; then
         local fingerprint
         fingerprint="$("${BIN_DIR}/ssh-keygen" -l -f "${enrolled_path}" 2>/dev/null || true)"
-        if [[ -n "${fingerprint}" ]]; then
-            log_success "Enrolled client '${client_name}': ${fingerprint}"
-        else
-            log_warn "Could not verify key fingerprint — ensure the key is valid"
+        if [[ -z "${fingerprint}" ]]; then
+            log_error "Invalid public key: file is not a valid SSH public key"
+            rm -f "${enrolled_path}"
+            return 1
         fi
+
+        # Verify the key type matches the expected OTK master key algorithm
+        local key_type
+        key_type="$(awk '{print $1}' "${enrolled_path}" 2>/dev/null || true)"
+        if [[ -n "${OTK_MASTER_SIGN_ALGO}" && "${key_type}" != "${OTK_MASTER_SIGN_ALGO}" ]]; then
+            log_warn "Key type mismatch: expected '${OTK_MASTER_SIGN_ALGO}', got '${key_type}'"
+            log_warn "Proceeding with enrollment — ensure this is intentional"
+        fi
+
+        log_success "Enrolled client '${client_name}': ${fingerprint}"
     else
-        log_success "Enrolled client '${client_name}'"
+        # Without ssh-keygen, do a basic format check (key should have at least 2 fields)
+        local field_count
+        field_count="$(awk '{print NF}' "${enrolled_path}" 2>/dev/null | head -1)"
+        if [[ -z "${field_count}" ]] || (( field_count < 2 )); then
+            log_error "Invalid public key: file does not appear to be a valid SSH public key"
+            rm -f "${enrolled_path}"
+            return 1
+        fi
+        log_success "Enrolled client '${client_name}' (key format not fully verified — ssh-keygen unavailable)"
     fi
 
     log_info "Enrolled key stored at: ${enrolled_path}"
