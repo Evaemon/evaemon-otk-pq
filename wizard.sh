@@ -84,6 +84,8 @@ ensure_permissions() {
         "${SCRIPT_DIR}/server/update.sh"
         "${SCRIPT_DIR}/server/pq_only_testmode.sh"
         "${SCRIPT_DIR}/server/tools/diagnostics.sh"
+        "${SCRIPT_DIR}/server/otk/otk_server.sh"
+        "${SCRIPT_DIR}/server/otk/revocation_ledger.sh"
         "${SCRIPT_DIR}/client/keygen.sh"
         "${SCRIPT_DIR}/client/copy_key_to_server.sh"
         "${SCRIPT_DIR}/client/connect.sh"
@@ -93,6 +95,10 @@ ensure_permissions() {
         "${SCRIPT_DIR}/client/migrate_keys.sh"
         "${SCRIPT_DIR}/client/tools/debug.sh"
         "${SCRIPT_DIR}/client/tools/performance_test.sh"
+        "${SCRIPT_DIR}/client/otk/master_key.sh"
+        "${SCRIPT_DIR}/client/otk/session_key.sh"
+        "${SCRIPT_DIR}/client/otk/otk_lifecycle.sh"
+        "${SCRIPT_DIR}/client/otk/otk_connect.sh"
     )
     for script in "${scripts[@]}"; do
         [ -f "$script" ] && chmod +x "$script"
@@ -245,15 +251,16 @@ handle_server_menu() {
 
         local choice
         choice=$(whiptail --title "Evaemon v${VERSION} — Server" \
-            --menu "Server Configuration:" "$BOX_H" "$BOX_W" 8 \
+            --menu "Server Configuration:" "$BOX_H" "$BOX_W" 10 \
             "1" "${build_label}" \
             "2" "Configure sshd" \
             "3" "Monitor sshd" \
             "4" "Update / Rebuild" \
             "5" "PQ-Only Test Mode (experimental)" \
             "6" "Diagnostics" \
-            "7" "Back to Main Menu" \
-            "8" "Exit" \
+            "7" "OTK-PQ Setup & Management" \
+            "8" "Back to Main Menu" \
+            "9" "Exit" \
             3>&1 1>&2 2>&3) || return 0
 
         case "$choice" in
@@ -263,8 +270,9 @@ handle_server_menu() {
             4) run_sub "Update / Rebuild"     "${SCRIPT_DIR}/server/update.sh" ;;
             5) run_sub "PQ-Only Test Mode"    "${SCRIPT_DIR}/server/pq_only_testmode.sh" ;;
             6) run_sub "Diagnostics"          "${SCRIPT_DIR}/server/tools/diagnostics.sh" ;;
-            7) return 0 ;;
-            8) exit 0 ;;
+            7) handle_otk_server_menu ;;
+            8) return 0 ;;
+            9) exit 0 ;;
         esac
     done
 }
@@ -280,7 +288,7 @@ handle_client_menu() {
 
         local choice
         choice=$(whiptail --title "Evaemon v${VERSION} — Client" \
-            --menu "Client Configuration:" "$BOX_H" "$BOX_W" 12 \
+            --menu "Client Configuration:" "$BOX_H" "$BOX_W" 14 \
             "1"  "${build_label}" \
             "2"  "Generate Keys" \
             "3"  "Copy Key to Server" \
@@ -289,10 +297,11 @@ handle_client_menu() {
             "6"  "Health Check" \
             "7"  "Rotate Keys" \
             "8"  "Migrate Classical Keys to PQ" \
-            "9"  "Debug Tools" \
-            "10" "Performance Benchmark" \
-            "11" "Back to Main Menu" \
-            "12" "Exit" \
+            "9"  "OTK-PQ — One-Time Key Connect" \
+            "10" "Debug Tools" \
+            "11" "Performance Benchmark" \
+            "12" "Back to Main Menu" \
+            "13" "Exit" \
             3>&1 1>&2 2>&3) || return 0
 
         case "$choice" in
@@ -304,10 +313,67 @@ handle_client_menu() {
             6)  run_sub "Health Check"          "${SCRIPT_DIR}/client/health_check.sh" ;;
             7)  run_sub "Key Rotation"          "${SCRIPT_DIR}/client/key_rotation.sh" ;;
             8)  run_sub "Key Migration"         "${SCRIPT_DIR}/client/migrate_keys.sh" ;;
-            9)  run_sub "Debug Tools"           "${SCRIPT_DIR}/client/tools/debug.sh" ;;
-            10) run_sub "Performance Benchmark" "${SCRIPT_DIR}/client/tools/performance_test.sh" ;;
-            11) return 0 ;;
-            12) exit 0 ;;
+            9)  handle_otk_client_menu ;;
+            10) run_sub "Debug Tools"           "${SCRIPT_DIR}/client/tools/debug.sh" ;;
+            11) run_sub "Performance Benchmark" "${SCRIPT_DIR}/client/tools/performance_test.sh" ;;
+            12) return 0 ;;
+            13) exit 0 ;;
+        esac
+    done
+}
+
+# ── OTK-PQ Submenus ──────────────────────────────────────────────────────────
+
+handle_otk_server_menu() {
+    while true; do
+        local choice
+        choice=$(whiptail --title "Evaemon v${VERSION} — OTK-PQ Server" \
+            --menu "One-Time Key Post-Quantum Server:" "$BOX_H" "$BOX_W" 7 \
+            "1" "Setup OTK-PQ Server" \
+            "2" "Enroll Client Master Key" \
+            "3" "List Enrolled Clients" \
+            "4" "Revoke Client" \
+            "5" "Revocation Ledger Statistics" \
+            "6" "Prune Revocation Ledger" \
+            "7" "Back" \
+            3>&1 1>&2 2>&3) || return 0
+
+        case "$choice" in
+            1) run_sub "OTK-PQ Server Setup"    "${SCRIPT_DIR}/server/otk/otk_server.sh" setup ;;
+            2) run_sub "Enroll Client"          "${SCRIPT_DIR}/server/otk/otk_server.sh" enroll ;;
+            3) run_sub "Enrolled Clients"       "${SCRIPT_DIR}/server/otk/otk_server.sh" list ;;
+            4) run_sub "Revoke Client"          "${SCRIPT_DIR}/server/otk/otk_server.sh" revoke ;;
+            5) run_sub "Ledger Statistics"      "${SCRIPT_DIR}/server/otk/revocation_ledger.sh" stats ;;
+            6) run_sub "Prune Ledger"           "${SCRIPT_DIR}/server/otk/revocation_ledger.sh" prune ;;
+            7) return 0 ;;
+        esac
+    done
+}
+
+handle_otk_client_menu() {
+    while true; do
+        local choice
+        choice=$(whiptail --title "Evaemon v${VERSION} — OTK-PQ Client" \
+            --menu "One-Time Key Post-Quantum Client:" "$BOX_H" "$BOX_W" 8 \
+            "1" "Generate Master Key" \
+            "2" "Master Key Info" \
+            "3" "Verify Master Key" \
+            "4" "Export Master Public Key" \
+            "5" "OTK Connect (one-time session)" \
+            "6" "Cleanup Stale Sessions" \
+            "7" "Rotate Master Key" \
+            "8" "Back" \
+            3>&1 1>&2 2>&3) || return 0
+
+        case "$choice" in
+            1) run_sub "Generate Master Key"    "${SCRIPT_DIR}/client/otk/master_key.sh" generate ;;
+            2) run_sub "Master Key Info"        "${SCRIPT_DIR}/client/otk/master_key.sh" info ;;
+            3) run_sub "Verify Master Key"      "${SCRIPT_DIR}/client/otk/master_key.sh" verify ;;
+            4) run_sub "Export Master Key"       "${SCRIPT_DIR}/client/otk/master_key.sh" export ;;
+            5) run_sub "OTK-PQ Connect"         "${SCRIPT_DIR}/client/otk/otk_connect.sh" ;;
+            6) run_sub "Cleanup Sessions"       "${SCRIPT_DIR}/client/otk/otk_lifecycle.sh" cleanup ;;
+            7) run_sub "Rotate Master Key"      "${SCRIPT_DIR}/client/otk/master_key.sh" rotate ;;
+            8) return 0 ;;
         esac
     done
 }
