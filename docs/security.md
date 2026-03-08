@@ -176,11 +176,19 @@ Deploy keys from **at least two different assumption families**:
 
 ## OTK-PQ operational security
 
+### Input validation & injection prevention
+
+**Enrollment validation:** the server validates all enrolled public keys using `ssh-keygen -l -f` before storing. Invalid keys are rejected. Key type is checked against `OTK_MASTER_SIGN_ALGO`.
+
+**Session bundle validation:** before signature verification, the server validates that session public keys contain properly formatted SSH keys (correct prefix, base64 data present).
+
+**Remote script injection prevention:** all variable data injected into remote scripts (session push and cleanup) is base64-encoded before interpolation. This prevents shell metacharacter interpretation (`$()`, backticks, `${}`) if key material contains unexpected characters.
+
 ### Nonce validation
 
 Every session bundle includes a nonce (timestamp + 32 bytes CSPRNG). The server rejects bundles with:
-- Timestamps in the future (clock skew)
-- Timestamps older than `OTK_NONCE_MAX_AGE` (default 300 seconds)
+- Timestamps in the future (clock skew) — error includes skew magnitude and NTP recommendation
+- Timestamps older than `OTK_NONCE_MAX_AGE` (default 300 seconds) — large deviations (>1 hour) are flagged as probable clock skew
 - Non-numeric or malformed timestamps
 
 **Clock synchronisation:** ensure client and server clocks are synchronised within `OTK_NONCE_MAX_AGE` seconds. Use NTP.
@@ -200,7 +208,7 @@ Session key material is destroyed using:
 2. **Manual overwrite** — `dd` from `/dev/urandom` (fallback if shred unavailable)
 3. **Verification** — post-destruction check confirms no files remain
 
-Configure the number of overwrite passes with `OTK_SHRED_PASSES` (default 3).
+Configure the number of overwrite passes with `OTK_SHRED_PASSES` (default 3). The manual overwrite fallback detects and warns on disk-full or I/O errors during each pass.
 
 ### Bootstrap connection security
 
@@ -208,6 +216,19 @@ OTK-PQ uses an existing PQ or classical key to push the session bundle to the se
 - Must use PQ KEX algorithms (configured automatically)
 - Should use a key that is already enrolled via standard `authorized_keys`
 - Is separate from the ephemeral session — the session key is what authenticates the actual connection
+
+### StrictHostKeyChecking behaviour
+
+OTK-PQ uses `StrictHostKeyChecking=accept-new` for both the bootstrap push and the ephemeral session connection. This means:
+- **First connection to a new host:** the server's host key is automatically accepted and saved to `known_hosts`. This is a **TOFU (Trust On First Use)** model — an attacker performing a MitM during the *very first* connection can substitute their own host key.
+- **Subsequent connections:** rejected if the host key changes (standard SSH behaviour).
+
+**Mitigation:** before the first OTK-PQ connection, manually verify the server's host key fingerprint via an out-of-band channel (e.g. console access), or pre-populate `known_hosts`:
+```bash
+# Pre-populate the server's host key fingerprint
+ssh-keyscan -H <server_host> >> ~/.ssh/known_hosts
+```
+After pre-populating, you can set `StrictHostKeyChecking=yes` in your SSH config for maximum security.
 
 ---
 
@@ -358,7 +379,7 @@ This overhead is negligible for interactive SSH sessions.
 
 2. **Initial enrollment must be secure.** If the first master key transfer is compromised, the system is broken. This is a bootstrapping problem common to all PKI.
 
-3. **Revocation ledger growth.** The server must maintain a record of used keys. Mitigated by time-based pruning (7-day default).
+3. **Revocation ledger growth.** The server must maintain a record of used keys. Mitigated by time-based pruning (7-day default). The prune operation uses temp-file traps to prevent orphaned files on abnormal exit.
 
 4. **Client device compromise.** If the master private key is extracted, the system is broken. Hardware-backed storage mitigates this.
 

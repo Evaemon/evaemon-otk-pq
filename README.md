@@ -230,6 +230,7 @@ evaemon-otk-pq/
     ├── installation.md                    # Installation guide
     ├── usage.md                           # Full usage manual
     ├── security.md                        # Threat model & hardening
+    ├── code-review-report.md              # Code review findings & fixes
     └── examples/
         ├── connect_falcon1024.sh
         ├── ssh_config_snippet.txt

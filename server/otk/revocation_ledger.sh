@@ -137,7 +137,10 @@ _prune_entries() {
     original_count="$(wc -l < "${OTK_LEDGER_FILE}")"
 
     # Keep only entries with timestamp >= cutoff
-    local tmp_file="${OTK_LEDGER_FILE}.tmp"
+    local tmp_file
+    tmp_file="$(mktemp "${OTK_LEDGER_FILE}.tmp.XXXXXX")"
+    trap 'rm -f "${tmp_file}"' RETURN
+
     while IFS= read -r line; do
         local entry_ts="${line%% *}"
         if [[ "${entry_ts}" =~ ^[0-9]+$ ]] && (( entry_ts >= cutoff_ts )); then

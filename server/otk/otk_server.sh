@@ -78,17 +78,36 @@ enroll_master_key() {
 
     chmod "${OTK_PUBLIC_KEY_PERMS}" "${enrolled_path}"
 
-    # Verify the key is readable
+    # Validate that the file contains a valid SSH public key
+    # This prevents storing corrupt or malicious files as enrolled keys
     if [[ -x "${BIN_DIR}/ssh-keygen" ]]; then
         local fingerprint
         fingerprint="$("${BIN_DIR}/ssh-keygen" -l -f "${enrolled_path}" 2>/dev/null || true)"
-        if [[ -n "${fingerprint}" ]]; then
-            log_success "Enrolled client '${client_name}': ${fingerprint}"
-        else
-            log_warn "Could not verify key fingerprint — ensure the key is valid"
+        if [[ -z "${fingerprint}" ]]; then
+            log_error "Invalid public key: file is not a valid SSH public key"
+            rm -f "${enrolled_path}"
+            return 1
         fi
+
+        # Verify the key type matches the expected OTK master key algorithm
+        local key_type
+        key_type="$(awk '{print $1}' "${enrolled_path}" 2>/dev/null || true)"
+        if [[ -n "${OTK_MASTER_SIGN_ALGO}" && "${key_type}" != "${OTK_MASTER_SIGN_ALGO}" ]]; then
+            log_warn "Key type mismatch: expected '${OTK_MASTER_SIGN_ALGO}', got '${key_type}'"
+            log_warn "Proceeding with enrollment — ensure this is intentional"
+        fi
+
+        log_success "Enrolled client '${client_name}': ${fingerprint}"
     else
-        log_success "Enrolled client '${client_name}'"
+        # Without ssh-keygen, do a basic format check (key should have at least 2 fields)
+        local field_count
+        field_count="$(awk '{print NF}' "${enrolled_path}" 2>/dev/null | head -1)"
+        if [[ -z "${field_count}" ]] || (( field_count < 2 )); then
+            log_error "Invalid public key: file does not appear to be a valid SSH public key"
+            rm -f "${enrolled_path}"
+            return 1
+        fi
+        log_success "Enrolled client '${client_name}' (key format not fully verified — ssh-keygen unavailable)"
     fi
 
     log_info "Enrolled key stored at: ${enrolled_path}"
@@ -173,6 +192,23 @@ verify_session_bundle() {
         fi
     done
 
+    # Validate that public key files contain properly formatted SSH keys
+    for key_file in "session_key.pub" "session_pq_key.pub"; do
+        local key_content
+        key_content="$(cat "${export_dir}/${key_file}")"
+        # SSH public keys must have at least 2 space-separated fields: type and base64 data
+        if [[ -z "${key_content}" ]] || (( $(echo "${key_content}" | awk '{print NF}') < 2 )); then
+            log_error "Invalid session key format in ${key_file}: expected 'type base64data [comment]'"
+            return 1
+        fi
+        # Key type must start with ssh- or ecdsa- (covers ssh-ed25519, ssh-mldsa87, ecdsa-*, etc.)
+        local key_type="${key_content%% *}"
+        if [[ ! "${key_type}" =~ ^(ssh-|ecdsa-) ]]; then
+            log_error "Unrecognized key type '${key_type}' in ${key_file}"
+            return 1
+        fi
+    done
+
     local session_id
     session_id="$(cat "${export_dir}/session_id")"
     local nonce
@@ -199,12 +235,17 @@ verify_session_bundle() {
     fi
 
     if (( nonce_age < 0 )); then
-        log_error "Nonce timestamp is in the future (clock skew: ${nonce_age}s)"
+        local skew=$(( -nonce_age ))
+        log_error "Clock skew detected: client clock is ${skew}s ahead of server"
+        log_error "Sync clocks with NTP or increase OTK_NONCE_MAX_AGE (current: ${OTK_NONCE_MAX_AGE}s)"
         return 1
     fi
 
     if (( nonce_age > OTK_NONCE_MAX_AGE )); then
-        log_error "Nonce expired: ${nonce_age}s old (max: ${OTK_NONCE_MAX_AGE}s)"
+        log_error "Session nonce expired: age=${nonce_age}s exceeds max=${OTK_NONCE_MAX_AGE}s"
+        if (( nonce_age > 3600 )); then
+            log_error "Clock skew detected: client clock is ${nonce_age}s behind server — sync with NTP"
+        fi
         return 1
     fi
 

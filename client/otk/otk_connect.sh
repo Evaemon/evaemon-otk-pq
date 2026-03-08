@@ -163,7 +163,7 @@ _push_and_connect() {
     nonce_content="$(cat "${bundle_dir}/nonce")"
 
     local signature_b64
-    signature_b64="$(base64 -w 0 "${bundle_dir}/master_signature" 2>/dev/null || base64 "${bundle_dir}/master_signature" 2>/dev/null)"
+    signature_b64="$(base64 -w 0 "${bundle_dir}/master_signature" 2>/dev/null || base64 "${bundle_dir}/master_signature" 2>/dev/null | tr -d '\n')"
 
     local session_classical_pub
     session_classical_pub="$(cat "${bundle_dir}/session_key.pub")"
@@ -173,26 +173,31 @@ _push_and_connect() {
 
     # Push the session key to the server's authorized_keys (temporarily)
     # The server adds the key, we connect, and on disconnect the key is removed
+    #
+    # SECURITY: All variable data is base64-encoded before injection into the
+    # remote script to prevent shell metacharacter interpretation (e.g. $(), ``)
+    local session_pub_b64
+    session_pub_b64="$(printf '%s' "${session_pub_content}" | base64 -w 0 2>/dev/null || printf '%s' "${session_pub_content}" | base64 | tr -d '\n')"
+
+    local session_id_b64
+    session_id_b64="$(printf '%s' "${session_id}" | base64 -w 0 2>/dev/null || printf '%s' "${session_id}" | base64 | tr -d '\n')"
+
     local remote_script
-    remote_script="$(cat <<'REMOTE_EOF'
+    remote_script="$(cat <<REMOTE_EOF
 #!/bin/bash
 set -e
-SESSION_PUB="__SESSION_PUB__"
-SESSION_ID="__SESSION_ID__"
-AK="${HOME}/.ssh/authorized_keys"
+SESSION_PUB="\$(echo '${session_pub_b64}' | base64 -d 2>/dev/null || echo '${session_pub_b64}' | base64 -D 2>/dev/null)"
+SESSION_ID="\$(echo '${session_id_b64}' | base64 -d 2>/dev/null || echo '${session_id_b64}' | base64 -D 2>/dev/null)"
+AK="\${HOME}/.ssh/authorized_keys"
 
 # Add session key with a comment marking it as OTK
-mkdir -p "${HOME}/.ssh"
-echo "${SESSION_PUB}" >> "${AK}"
+mkdir -p "\${HOME}/.ssh"
+echo "\${SESSION_PUB}" >> "\${AK}"
 
 # Record session ID for tracking
-echo "OTK_SESSION_INSTALLED:${SESSION_ID}"
+echo "OTK_SESSION_INSTALLED:\${SESSION_ID}"
 REMOTE_EOF
 )"
-
-    # Substitute values into the remote script
-    remote_script="${remote_script//__SESSION_PUB__/${session_pub_content}}"
-    remote_script="${remote_script//__SESSION_ID__/${session_id}}"
 
     # Execute the remote script via the bootstrap key
     local push_result
@@ -233,22 +238,23 @@ REMOTE_EOF
     # Step 3: Remove the session key from the server's authorized_keys
     log_info "Removing ephemeral key from server..."
 
+    # SECURITY: base64-encode session key to prevent shell injection in cleanup script
     local cleanup_script
-    cleanup_script="$(cat <<'CLEANUP_EOF'
+    cleanup_script="$(cat <<CLEANUP_EOF
 #!/bin/bash
 set -e
-SESSION_PUB="__SESSION_PUB__"
-AK="${HOME}/.ssh/authorized_keys"
-if [ -f "${AK}" ]; then
-    TEMP=$(mktemp)
-    grep -vF "${SESSION_PUB}" "${AK}" > "${TEMP}" 2>/dev/null || true
-    mv "${TEMP}" "${AK}"
-    chmod 600 "${AK}"
+SESSION_PUB="\$(echo '${session_pub_b64}' | base64 -d 2>/dev/null || echo '${session_pub_b64}' | base64 -D 2>/dev/null)"
+AK="\${HOME}/.ssh/authorized_keys"
+if [ -f "\${AK}" ]; then
+    TEMP=\$(mktemp)
+    trap 'rm -f "\${TEMP}"' EXIT
+    grep -vF "\${SESSION_PUB}" "\${AK}" > "\${TEMP}" 2>/dev/null || true
+    mv "\${TEMP}" "\${AK}"
+    chmod 600 "\${AK}"
     echo "OTK_SESSION_REMOVED"
 fi
 CLEANUP_EOF
 )"
-    cleanup_script="${cleanup_script//__SESSION_PUB__/${session_pub_content}}"
 
     SSH_AUTH_SOCK="" "${BIN_DIR}/ssh" \
         -o "KexAlgorithms=${OTK_SESSION_KEX_LIST}" \

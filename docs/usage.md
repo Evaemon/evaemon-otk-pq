@@ -121,6 +121,11 @@ bash client/otk/master_key.sh rotate
 - Public key: `~/.ssh/otk/master/otk_master_sign.pub` (permissions 644)
 - Creation timestamp: `~/.ssh/otk/master/.master_created`
 
+**Integrity checks:** the `verify` command detects incomplete or corrupted master keys from interrupted generation:
+- Missing public key (private key only)
+- Orphaned public key (no matching private key)
+- Truncated private key (< 100 bytes)
+
 **Master key rotation:** after rotating, all servers must re-enroll the new public key. The old key is archived in `~/.ssh/otk/master/archive/<timestamp>/`.
 
 ---
@@ -163,7 +168,7 @@ bash client/otk/otk_lifecycle.sh verify <bundle_dir>
 bash client/otk/otk_lifecycle.sh cleanup
 ```
 
-**Secure destruction:** uses `shred` (multi-pass overwrite + zero pass + unlink) when available, falls back to manual overwrite with random data. Configurable via `OTK_SHRED_PASSES` (default: 3).
+**Secure destruction:** uses `shred` (multi-pass overwrite + zero pass + unlink) when available, falls back to manual overwrite with random data. Configurable via `OTK_SHRED_PASSES` (default: 3). The manual fallback detects and warns on disk-full or I/O errors during overwrite passes.
 
 ---
 
@@ -219,6 +224,10 @@ bash server/otk/otk_server.sh ledger stats
 bash server/otk/otk_server.sh ledger prune
 ```
 
+**Enrollment validation:** the `enroll` command validates that the provided file is a valid SSH public key before storing it. It also checks whether the key type matches the expected `OTK_MASTER_SIGN_ALGO` and warns on mismatch. Invalid keys are rejected.
+
+**Session bundle validation:** the `verify` command checks that session public keys have the correct SSH key format (`ssh-*` or `ecdsa-*` prefix with base64 data) before proceeding with signature verification.
+
 **Important:** The server only stores master *public* keys. If the server is compromised, the attacker cannot forge session keys because they lack the client's master private key.
 
 ---
@@ -244,7 +253,7 @@ bash server/otk/revocation_ledger.sh stats
 bash server/otk/revocation_ledger.sh init
 ```
 
-**Format:** each line is `TIMESTAMP SESSION_ID_HASH`. Entries older than `OTK_LEDGER_PRUNE_DAYS` (default 7) are pruned. File-level locking (flock) prevents corruption from concurrent sessions.
+**Format:** each line is `TIMESTAMP SESSION_ID_HASH`. Entries older than `OTK_LEDGER_PRUNE_DAYS` (default 7) are pruned. File-level locking (flock) prevents corruption from concurrent sessions. The prune operation uses a temporary file with cleanup trap to prevent orphaned temp files on abnormal exit.
 
 ---
 
