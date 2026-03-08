@@ -205,6 +205,8 @@ Or through the wizard:
 
 > **Important:** Initial enrollment must occur over a trusted channel. If the first key exchange is compromised, the master key is compromised.
 
+> **Validation:** The server validates that the enrolled file is a valid SSH public key (via `ssh-keygen -l -f`) and warns if the key type doesn't match the expected `OTK_MASTER_SIGN_ALGO`. Invalid keys are rejected and not stored.
+
 ### Step 3 — Connect with OTK-PQ
 
 ```bash
@@ -241,7 +243,7 @@ Five stages: binary check → key check → TCP reachability → SSH handshake �
 ### OTK-PQ verification
 
 ```bash
-# Verify master key integrity
+# Verify master key integrity (also detects incomplete/truncated keys)
 bash client/otk/master_key.sh verify
 
 # Check master key info
@@ -253,6 +255,8 @@ bash server/otk/otk_server.sh list
 # View revocation ledger statistics (server)
 bash server/otk/revocation_ledger.sh stats
 ```
+
+> **Note:** The `verify` command detects incomplete or corrupted master keys that may result from interrupted key generation (e.g. `ssh-keygen` killed mid-operation). It checks for orphaned key halves and truncated private keys.
 
 ### Running the test suite
 
