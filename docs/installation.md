@@ -1,6 +1,6 @@
-# Installation Guide
+# Installation Guide — Evaemon OTK-PQ
 
-This guide walks you through installing Evaemon on both a **server** and a **client** machine. By the end you will have a fully functional post-quantum SSH server and at least one authenticated client.
+This guide walks you through installing Evaemon OTK-PQ on both a **server** and a **client** machine. By the end you will have a fully functional post-quantum SSH server with one-time key authentication.
 
 ---
 
@@ -11,8 +11,9 @@ This guide walks you through installing Evaemon on both a **server** and a **cli
 3. [Building OQS-OpenSSH](#building-oqs-openssh)
 4. [Server setup](#server-setup)
 5. [Client setup](#client-setup)
-6. [Verifying the installation](#verifying-the-installation)
-7. [Uninstalling](#uninstalling)
+6. [OTK-PQ setup](#otk-pq-setup)
+7. [Verifying the installation](#verifying-the-installation)
+8. [Uninstalling](#uninstalling)
 
 ---
 
@@ -44,8 +45,6 @@ sudo dnf install -y \
 
 ### Disk space
 
-The build process downloads and compiles liboqs and OQS-OpenSSH from source.
-
 | Artifact | Approximate size |
 |---|---|
 | Source downloads | ~150 MB |
@@ -56,14 +55,12 @@ The build process downloads and compiles liboqs and OQS-OpenSSH from source.
 
 ## Obtaining the toolkit
 
-Clone the repository to a directory of your choice:
-
 ```bash
-git clone https://github.com/Yarpii/Evaemon.git
-cd Evaemon
+git clone https://github.com/Yarpii/evaemon-otk-pq.git
+cd evaemon-otk-pq
 ```
 
-All scripts are relative to this directory. The working directory throughout this guide is assumed to be the repository root.
+All scripts are relative to this directory.
 
 ---
 
@@ -75,64 +72,50 @@ The build script fetches liboqs and OQS-OpenSSH, compiles them, and installs the
 sudo bash build_oqs_openssh.sh
 ```
 
-This takes 5-20 minutes depending on your CPU. When it finishes, verify the binary is present:
+This takes 5-20 minutes depending on your CPU. When it finishes, verify:
 
 ```bash
 build/bin/ssh -V
 ```
 
-Expected output (version numbers may vary):
-```
-OpenSSH_9.x OQS-v9.x, liboqs x.x.x
-```
-
-> **Recommended:** launch the build from the wizard (`wizard.sh`). The wizard runs the build in the background and shows a live step-by-step progress gauge so you can see exactly which phase is running:
-> ```
-> Step 1/7 — Installing dependencies
-> Step 2/7 — Cloning liboqs
-> Step 3/7 — Building liboqs
-> Step 4/7 — Cloning OpenSSH
-> Step 5/7 — Compiling OpenSSH
-> Step 6/7 — Linking shared libraries
-> Step 7/7 — Finalizing installation
-> ```
-> If the build fails, the wizard offers to open the full build log in a scrollable viewer without leaving the GUI.
+> **Recommended:** launch the build from the wizard (`sudo bash wizard.sh`). The wizard shows a live step-by-step progress gauge and offers inline log viewing if the build fails.
 
 ---
 
 ## Server setup
 
-Run the interactive wizard as root:
+### Standard PQ SSH server
 
 ```bash
 sudo bash wizard.sh
+# Select: 1 (Server) → 2 (Configure sshd)
 ```
 
-Select **1 (Server)** at the mode selection prompt, then follow the menu:
-
-### Step 1 - Build OQS-OpenSSH (if not done already)
-
-Menu option **1 - Build and install OQS-OpenSSH**
-
-### Step 2 - Configure the server
-
-Menu option **2 - Configure Server**
-
-You will be prompted to select an **algorithm mode**:
+Choose an algorithm mode:
 
 | Mode | Description |
 |------|-------------|
-| `1`  | All PQ algorithms — host keys and `HostKeyAlgorithms` cover all 10 PQ types |
-| `2`  | Select specific PQ algorithms — choose a subset by security level or performance |
-| `3`  | Hybrid (all PQ) — adds Ed25519 + RSA host keys; classical clients can connect too |
-| `4`  | Hybrid (select PQ) — choose PQ algorithms + Ed25519 + RSA |
+| `1` | All PQ algorithms — broadest PQ client compatibility |
+| `2` | Select specific PQ algorithms |
+| `3` | Hybrid — all PQ + Ed25519 and RSA |
+| `4` | Hybrid — select specific PQ + Ed25519 and RSA |
 
-Falcon-1024 is recommended for most deployments (NIST Level 5, fast verification). For environments that also need to support standard OpenSSH clients, choose a hybrid mode (3 or 4).
+### OTK-PQ server
 
-The script will then:
-- Generate one host key pair per selected algorithm in `build/etc/keys/`
-- Write `build/etc/sshd_config` with `HostKeyAlgorithms`, `PubkeyAcceptedKeyTypes`, and `KexAlgorithms`
-- Install and enable the `evaemon-sshd` systemd service
+```bash
+sudo bash wizard.sh
+# Select: 1 (Server) → 7 (OTK-PQ Setup & Management) → 1 (Setup OTK-PQ Server)
+```
+
+Or directly:
+
+```bash
+sudo bash server/otk/otk_server.sh setup
+```
+
+This initialises:
+- The enrollment directory for client master public keys
+- The revocation ledger for tracking used session keys
 
 ### Starting the service
 
@@ -143,7 +126,7 @@ sudo systemctl status evaemon-sshd.service
 
 ### Firewall
 
-Open the configured SSH port (default 22) if a firewall is active:
+Open the configured SSH port:
 
 ```bash
 # ufw (Ubuntu)
@@ -158,94 +141,141 @@ sudo firewall-cmd --reload
 
 ## Client setup
 
-The client machine must also have OQS-OpenSSH built. Repeat the Build step on the client, or copy the `build/` directory from the server.
+The client machine must also have OQS-OpenSSH built. Repeat the build step on the client, or copy the `build/` directory from the server.
 
-### Step 1 - Generate a key pair
+### Standard PQ key pair
 
 ```bash
 sudo bash wizard.sh
-# Select: 2 (Client) -> 2 (Generate Keys)
+# Select: 2 (Client) → 2 (Generate Keys)
 ```
-
-Choose a key type:
-- **Post-quantum** — pick from the list of PQ algorithms; must match an algorithm the server advertises
-- **Classical** — Ed25519 or RSA; only works if the server was configured in hybrid mode (3 or 4)
-
-> In hybrid mode you can mix PQ and classical client keys across different users. In PQ-only mode (1 or 2) every client key must be a PQ algorithm the server has a host key for.
 
 Keys are written to `~/.ssh/id_<algorithm>` and `~/.ssh/id_<algorithm>.pub`.
 
-### Step 2 - Copy the public key to the server
+### Copy public key to server
 
 ```bash
-# Select: 2 (Client) -> 3 (Copy Key to Server)
+# Select: 2 (Client) → 3 (Copy Key to Server)
 ```
 
-Enter the server address, username, and port when prompted. The public key is appended to `~/.ssh/authorized_keys` on the server.
+This is required for the bootstrap connection that OTK-PQ uses to push session bundles.
 
-Alternatively, copy manually:
+---
+
+## OTK-PQ setup
+
+OTK-PQ setup involves three steps: generate a master key, enroll it on the server, then connect.
+
+### Step 1 — Generate the master key (client)
 
 ```bash
-cat ~/.ssh/id_ssh-falcon1024.pub | \
-  ssh user@server "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+sudo bash wizard.sh
+# Select: 2 (Client) → 9 (OTK-PQ) → 1 (Generate Master Key)
 ```
 
-### Step 3 - Connect
+Or directly:
 
 ```bash
-# Select: 2 (Client) -> 4 (Connect to Server)
+sudo bash client/otk/master_key.sh generate
 ```
 
-Or directly (PQ-only):
+This creates an ML-DSA-87 (FIPS 204, Level 5) master key pair:
+- Private key: `~/.ssh/otk/master/otk_master_sign` (permissions 600, **never leaves the client**)
+- Public key: `~/.ssh/otk/master/otk_master_sign.pub` (for server enrollment)
+
+### Step 2 — Enroll the master key (server)
+
+Export the master public key from the client:
 
 ```bash
-build/bin/ssh \
-  -o "KexAlgorithms=ecdh-nistp384-kyber-1024r3-sha384-d00@openquantumsafe.org,ecdh-nistp256-kyber-512r3-sha256-d00@openquantumsafe.org" \
-  -o "HostKeyAlgorithms=ssh-falcon1024" \
-  -o "PubkeyAcceptedKeyTypes=ssh-falcon1024" \
-  -i ~/.ssh/id_ssh-falcon1024 \
-  -p 22 user@server
+bash client/otk/master_key.sh export > my_master.pub
 ```
 
-The `KexAlgorithms` flag ensures the session key exchange also uses a post-quantum-resistant algorithm, not just the authentication step. `client/connect.sh` sets this automatically.
+Transfer it to the server (via SCP, USB, or any trusted channel), then enroll:
+
+```bash
+sudo bash server/otk/otk_server.sh enroll alice my_master.pub
+```
+
+Or through the wizard:
+
+```bash
+# Server wizard: 1 (Server) → 7 (OTK-PQ) → 2 (Enroll Client Master Key)
+```
+
+> **Important:** Initial enrollment must occur over a trusted channel. If the first key exchange is compromised, the master key is compromised.
+
+### Step 3 — Connect with OTK-PQ
+
+```bash
+sudo bash wizard.sh
+# Select: 2 (Client) → 9 (OTK-PQ) → 5 (OTK Connect)
+```
+
+Or directly:
+
+```bash
+bash client/otk/otk_connect.sh server_host username [port]
+```
+
+Every connection:
+1. Generates a fresh ephemeral hybrid key pair
+2. Signs it with your master key
+3. Pushes the session bundle to the server
+4. Connects via the one-time key
+5. Destroys all key material after disconnect
+6. Adds the session key hash to the revocation ledger
 
 ---
 
 ## Verifying the installation
 
-Use the built-in health check to confirm everything works end-to-end:
+### Health check
 
 ```bash
-# Select: 2 (Client) -> 6 (Health Check)
+bash client/health_check.sh
 ```
 
-The health check performs five stages:
-- OQS binary presence
-- Key file + permissions
-- TCP reachability
-- SSH handshake (echo probe)
-- Server host key fingerprint
+Five stages: binary check → key check → TCP reachability → SSH handshake → host fingerprint.
 
-All stages should report **PASS**.
+### OTK-PQ verification
+
+```bash
+# Verify master key integrity
+bash client/otk/master_key.sh verify
+
+# Check master key info
+bash client/otk/master_key.sh info
+
+# View enrolled clients (server)
+bash server/otk/otk_server.sh list
+
+# View revocation ledger statistics (server)
+bash server/otk/revocation_ledger.sh stats
+```
 
 ### Running the test suite
 
 ```bash
-# Unit tests (no OQS binary required)
+# OTK-PQ tests (103 assertions, no OQS binary required)
+bash shared/tests/unit_tests/test_otk_config.sh
+bash shared/tests/unit_tests/test_otk_session_key.sh
+bash shared/tests/unit_tests/test_otk_lifecycle.sh
+bash shared/tests/unit_tests/test_otk_master_key.sh
+bash shared/tests/unit_tests/test_otk_revocation_ledger.sh
+
+# Base unit tests (no OQS binary required)
 bash shared/tests/unit_tests/test_validation.sh
 bash shared/tests/unit_tests/test_logging.sh
 bash shared/tests/unit_tests/test_functions.sh
-bash shared/tests/unit_tests/test_backup.sh
-bash shared/tests/unit_tests/test_copy_key.sh
-bash shared/tests/unit_tests/test_connect.sh
 
-# Integration tests (auto-skip OQS-dependent tests if binary absent)
+# Integration tests (auto-skip if OQS absent)
 bash shared/tests/integration_tests/test_keygen.sh
 bash shared/tests/integration_tests/test_server.sh
 bash shared/tests/integration_tests/test_key_rotation.sh
 ```
 
-All tests should exit with code 0 (199 tests total).
+All tests exit 0 on success. The full suite counts **334+ tests**.
 
 ---
 
@@ -264,9 +294,19 @@ All tests should exit with code 0 (199 tests total).
    rm -rf build/
    ```
 
-3. Optionally remove generated keys:
+3. Remove OTK-PQ key material:
+   ```bash
+   rm -rf ~/.ssh/otk/
+   ```
+
+4. Remove standard PQ keys (optional):
    ```bash
    rm -f ~/.ssh/id_ssh-* ~/.ssh/id_ssh-*.pub
+   ```
+
+5. Remove server OTK data (optional):
+   ```bash
+   rm -rf build/etc/otk/
    ```
 
 The system's standard OpenSSH installation is never modified by this toolkit.
