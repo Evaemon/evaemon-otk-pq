@@ -9,7 +9,7 @@
 
 ## Samenvatting
 
-Het evaemon-otk-pq project is een goed gestructureerd en veilig systeem voor post-quantum SSH-authenticatie met one-time keys. De codebase bestaat uit ~2.949 regels productiecode verdeeld over 28 shell scripts, met 334+ tests in 17 testbestanden.
+Het evaemon-otk-pq project is een goed gestructureerd en veilig systeem voor post-quantum SSH-authenticatie met one-time keys. De codebase bestaat uit ~2.949 regels productiecode verdeeld over 28 shell scripts, met 349+ tests in 18 testbestanden.
 
 **Overall scores:**
 
@@ -17,7 +17,7 @@ Het evaemon-otk-pq project is een goed gestructureerd en veilig systeem voor pos
 |------------------|--------|-------------------------------------------------|
 | Error Handling   | 8/10   | `set -eo pipefail` overal, goede validatie      |
 | Security         | 9/10   | Permissions, secure delete, geen hardcoded secrets |
-| Test Coverage    | 9/10   | 334+ tests, 17 test files                       |
+| Test Coverage    | 9/10   | 349+ tests, 18 test files                       |
 | Cryptografie     | 9/10   | ML-DSA-87, ML-KEM-1024, SHA3-256, Ed25519 hybrid |
 | Documentatie     | 9/10   | Goede README, threat model, architectuur         |
 | Code Quality     | 8/10   | Consistent style, goede naamgeving               |
