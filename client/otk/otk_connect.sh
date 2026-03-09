@@ -28,6 +28,7 @@ source "${SCRIPT_DIR}/otk_lifecycle.sh"
 
 # otk_connect HOST USER PORT
 # Execute a full OTK-PQ connection lifecycle.
+# Returns the SSH session exit code (0 = clean exit), or 1 on connection failure.
 otk_connect() {
     local server_host="$1"
     local username="$2"
@@ -110,78 +111,40 @@ otk_connect() {
 
 # ── Push & Connect ───────────────────────────────────────────────────────────
 
-# _push_and_connect HOST USER PORT BUNDLE_DIR EXPORT_DIR
-# Transfer session bundle to the server and establish the SSH connection.
-_push_and_connect() {
-    local host="$1" user="$2" port="$3"
-    local bundle_dir="$4" export_dir="$5"
-
-    # Strategy: Use the existing PQ key (from standard evaemon) to push
-    # the session bundle, then re-connect using the ephemeral session key.
-    # This requires the client to have an existing PQ key for the initial
-    # bootstrap connection.
-
-    # Find an existing PQ key for the bootstrap connection
-    local bootstrap_key=""
+# _find_bootstrap_key
+# Find an existing SSH key usable for the bootstrap (pre-OTK) connection.
+# Checks PQ keys first, then falls back to classical key types.
+# Prints the key path to stdout and returns 0; calls log_fatal if none found.
+_find_bootstrap_key() {
     for algo in "${ALGORITHMS[@]}"; do
         local key_path="${SSH_DIR}/id_${algo}"
         if [[ -f "${key_path}" ]]; then
-            bootstrap_key="${key_path}"
-            break
+            echo "${key_path}"
+            return 0
         fi
     done
 
-    # Also check for classical keys as fallback
-    if [[ -z "${bootstrap_key}" ]]; then
-        for kt in "${CLASSICAL_KEYTYPES[@]}"; do
-            local key_path="${SSH_DIR}/id_${kt}"
-            if [[ -f "${key_path}" ]]; then
-                bootstrap_key="${key_path}"
-                break
-            fi
-        done
-    fi
+    for kt in "${CLASSICAL_KEYTYPES[@]}"; do
+        local key_path="${SSH_DIR}/id_${kt}"
+        if [[ -f "${key_path}" ]]; then
+            echo "${key_path}"
+            return 0
+        fi
+    done
 
-    if [[ -z "${bootstrap_key}" ]]; then
-        log_fatal "No existing SSH key found for bootstrap connection. Generate one first with: bash client/keygen.sh"
-    fi
+    log_fatal "No existing SSH key found for bootstrap connection. Generate one first with: bash client/keygen.sh"
+}
 
-    log_debug "Using bootstrap key: ${bootstrap_key}"
+# _execute_remote_verification HOST USER PORT BOOTSTRAP_KEY SESSION_PUB_B64 SESSION_ID_B64
+# Push the (base64-encoded) session public key to the server's authorized_keys
+# via the bootstrap key, so the server accepts the ephemeral key for one login.
+# Returns 0 on success, 1 if the remote install failed.
+_execute_remote_verification() {
+    local host="$1" user="$2" port="$3"
+    local bootstrap_key="$4" session_pub_b64="$5" session_id_b64="$6"
 
-    # Step 1: Push the session bundle to the server
-    # The server-side OTK verification script handles bundle validation
-    log_info "Transferring session bundle to server..."
-
-    # Create a temporary script that the server will execute to:
-    # - Receive and verify the session bundle
-    # - Temporarily add the session public key to authorized_keys
-    # - Clean up after the session ends
-    local session_pub_content
-    session_pub_content="$(cat "${bundle_dir}/session_pq_key.pub")"
-
-    local nonce_content
-    nonce_content="$(cat "${bundle_dir}/nonce")"
-
-    local signature_b64
-    signature_b64="$(base64 -w 0 "${bundle_dir}/master_signature" 2>/dev/null || base64 "${bundle_dir}/master_signature" 2>/dev/null | tr -d '\n')"
-
-    local session_classical_pub
-    session_classical_pub="$(cat "${bundle_dir}/session_key.pub")"
-
-    local session_id
-    session_id="$(cat "${bundle_dir}/session_id")"
-
-    # Push the session key to the server's authorized_keys (temporarily)
-    # The server adds the key, we connect, and on disconnect the key is removed
-    #
-    # SECURITY: All variable data is base64-encoded before injection into the
-    # remote script to prevent shell metacharacter interpretation (e.g. $(), ``)
-    local session_pub_b64
-    session_pub_b64="$(printf '%s' "${session_pub_content}" | base64 -w 0 2>/dev/null || printf '%s' "${session_pub_content}" | base64 | tr -d '\n')"
-
-    local session_id_b64
-    session_id_b64="$(printf '%s' "${session_id}" | base64 -w 0 2>/dev/null || printf '%s' "${session_id}" | base64 | tr -d '\n')"
-
+    # SECURITY: session_pub_b64 and session_id_b64 are base64-encoded before
+    # injection here to prevent shell metacharacter interpretation (e.g. $(), ``)
     local remote_script
     remote_script="$(cat <<REMOTE_EOF
 #!/bin/bash
@@ -190,16 +153,12 @@ SESSION_PUB="\$(echo '${session_pub_b64}' | base64 -d 2>/dev/null || echo '${ses
 SESSION_ID="\$(echo '${session_id_b64}' | base64 -d 2>/dev/null || echo '${session_id_b64}' | base64 -D 2>/dev/null)"
 AK="\${HOME}/.ssh/authorized_keys"
 
-# Add session key with a comment marking it as OTK
 mkdir -p "\${HOME}/.ssh"
 echo "\${SESSION_PUB}" >> "\${AK}"
-
-# Record session ID for tracking
 echo "OTK_SESSION_INSTALLED:\${SESSION_ID}"
 REMOTE_EOF
 )"
 
-    # Execute the remote script via the bootstrap key
     local push_result
     push_result="$(SSH_AUTH_SOCK="" "${BIN_DIR}/ssh" \
         -o "KexAlgorithms=${OTK_SESSION_KEX_LIST}" \
@@ -218,27 +177,17 @@ REMOTE_EOF
     fi
 
     log_success "Session key installed on server"
+    return 0
+}
 
-    # Step 2: Connect using the ephemeral session key
-    log_info "Connecting with ephemeral OTK session key..."
+# _cleanup_session HOST USER PORT BOOTSTRAP_KEY SESSION_PUB_B64
+# Remove the ephemeral session key from the server's authorized_keys.
+# Non-fatal: logs a warning if cleanup fails but always returns 0.
+_cleanup_session() {
+    local host="$1" user="$2" port="$3"
+    local bootstrap_key="$4" session_pub_b64="$5"
 
-    local session_key="${bundle_dir}/session_pq_key"
-    local session_algo="${OTK_MASTER_SIGN_ALGO}"
-    local connect_result=0
-
-    SSH_AUTH_SOCK="" "${BIN_DIR}/ssh" \
-        -o "KexAlgorithms=${OTK_SESSION_KEX_LIST}" \
-        -o "HostKeyAlgorithms=${session_algo},${CLASSICAL_HOST_ALGOS}" \
-        -o "PubkeyAcceptedKeyTypes=${session_algo},${CLASSICAL_HOST_ALGOS}" \
-        -o "StrictHostKeyChecking=accept-new" \
-        -i "${session_key}" \
-        -p "${port}" \
-        "${user}@${host}" || connect_result=$?
-
-    # Step 3: Remove the session key from the server's authorized_keys
-    log_info "Removing ephemeral key from server..."
-
-    # SECURITY: base64-encode session key to prevent shell injection in cleanup script
+    # SECURITY: session_pub_b64 is base64-encoded before injection
     local cleanup_script
     cleanup_script="$(cat <<CLEANUP_EOF
 #!/bin/bash
@@ -265,6 +214,58 @@ CLEANUP_EOF
         "${user}@${host}" \
         "${cleanup_script}" 2>/dev/null || log_warn "Could not clean up session key from server"
 
+    return 0
+}
+
+# _push_and_connect HOST USER PORT BUNDLE_DIR EXPORT_DIR
+# Orchestrate the three remote steps: install ephemeral key, establish SSH
+# session, then remove the key from the server's authorized_keys.
+# Returns the SSH session exit code, or 1 if the bootstrap push failed.
+_push_and_connect() {
+    local host="$1" user="$2" port="$3"
+    local bundle_dir="$4" export_dir="$5"
+
+    # Strategy: Use the existing PQ/classical key (bootstrap) to install the
+    # ephemeral session key on the server, then connect with it.
+    local bootstrap_key
+    bootstrap_key="$(_find_bootstrap_key)"
+    log_debug "Using bootstrap key: ${bootstrap_key}"
+
+    # Encode session key material — prevents shell injection in remote scripts
+    local session_pub_content
+    session_pub_content="$(cat "${bundle_dir}/session_pq_key.pub")"
+    local session_pub_b64
+    session_pub_b64="$(printf '%s' "${session_pub_content}" | base64 -w 0 2>/dev/null || printf '%s' "${session_pub_content}" | base64 | tr -d '\n')"
+
+    local session_id
+    session_id="$(cat "${bundle_dir}/session_id")"
+    local session_id_b64
+    session_id_b64="$(printf '%s' "${session_id}" | base64 -w 0 2>/dev/null || printf '%s' "${session_id}" | base64 | tr -d '\n')"
+
+    # Step 1: Push the session key to the server's authorized_keys
+    log_info "Transferring session bundle to server..."
+    _execute_remote_verification \
+        "${host}" "${user}" "${port}" \
+        "${bootstrap_key}" "${session_pub_b64}" "${session_id_b64}" || return 1
+
+    # Step 2: Connect using the ephemeral session key
+    log_info "Connecting with ephemeral OTK session key..."
+    local connect_result=0
+    SSH_AUTH_SOCK="" "${BIN_DIR}/ssh" \
+        -o "KexAlgorithms=${OTK_SESSION_KEX_LIST}" \
+        -o "HostKeyAlgorithms=${OTK_MASTER_SIGN_ALGO},${CLASSICAL_HOST_ALGOS}" \
+        -o "PubkeyAcceptedKeyTypes=${OTK_MASTER_SIGN_ALGO},${CLASSICAL_HOST_ALGOS}" \
+        -o "StrictHostKeyChecking=accept-new" \
+        -i "${bundle_dir}/session_pq_key" \
+        -p "${port}" \
+        "${user}@${host}" || connect_result=$?
+
+    # Step 3: Remove the session key from the server's authorized_keys
+    log_info "Removing ephemeral key from server..."
+    _cleanup_session \
+        "${host}" "${user}" "${port}" \
+        "${bootstrap_key}" "${session_pub_b64}"
+
     return ${connect_result}
 }
 
@@ -272,6 +273,7 @@ CLEANUP_EOF
 
 # otk_connect_interactive
 # Prompt for connection details and execute OTK connection.
+# Returns the SSH session exit code, or exits 1 on missing master key or invalid input.
 otk_connect_interactive() {
     echo "OTK-PQ — One-Time Key Post-Quantum SSH Connection"
     echo "──────────────────────────────────────────────────"

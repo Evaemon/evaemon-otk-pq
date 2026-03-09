@@ -21,7 +21,8 @@ source "${SCRIPT_DIR}/../../shared/functions.sh"
 # ── Initialization ───────────────────────────────────────────────────────────
 
 # init_ledger
-# Create the ledger file and directory with correct permissions.
+# Create the ledger file and directory with correct permissions if they do not exist.
+# Returns 0 always (idempotent).
 init_ledger() {
     if [[ ! -d "${OTK_LEDGER_DIR}" ]]; then
         mkdir -p "${OTK_LEDGER_DIR}"
@@ -41,6 +42,7 @@ init_ledger() {
 # _with_ledger_lock COMMAND [ARGS...]
 # Execute a command while holding an exclusive lock on the ledger.
 # Prevents concurrent writes from corrupting the file.
+# Returns the exit code of COMMAND, or 1 if the lock cannot be acquired within 10s.
 _with_ledger_lock() {
     init_ledger
 
@@ -83,6 +85,7 @@ _check_entry() {
 # ledger_add SESSION_ID
 # Record a session key hash in the revocation ledger.
 # Should be called after a session completes (or during, for extra safety).
+# Returns 0 on success, 1 if SESSION_ID is empty.
 ledger_add() {
     local session_id="$1"
 
@@ -119,6 +122,7 @@ ledger_check() {
 # ledger_prune
 # Remove entries older than OTK_LEDGER_PRUNE_DAYS from the ledger.
 # Called periodically or when the ledger exceeds OTK_LEDGER_MAX_ENTRIES.
+# Returns 0 always.
 ledger_prune() {
     init_ledger
 
@@ -159,6 +163,7 @@ _prune_entries() {
 
 # ledger_stats
 # Display revocation ledger statistics.
+# Returns 0 always.
 ledger_stats() {
     init_ledger
 

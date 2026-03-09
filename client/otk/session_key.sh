@@ -28,6 +28,7 @@ source "${SCRIPT_DIR}/../../shared/functions.sh"
 # generate_nonce OUTPUT_DIR
 # Create a session nonce: timestamp (epoch seconds) + cryptographic random.
 # Written to OUTPUT_DIR/nonce as "TIMESTAMP:RANDOM_HEX".
+# Prints the nonce to stdout. Returns 0 on success; exits non-zero if openssl fails.
 generate_nonce() {
     local output_dir="$1"
     local timestamp random_hex nonce
@@ -87,7 +88,8 @@ validate_nonce() {
 
 # generate_session_id NONCE SESSION_PUB_KEY_PATH [PQ_PUB_KEY_PATH]
 # Compute a unique session ID by hashing the nonce + public key material.
-# Uses SHA3-256 (FIPS 202) for the revocation ledger.
+# Uses SHA3-256 (FIPS 202) for the revocation ledger; falls back to SHA-256.
+# Prints the hex session ID to stdout. Returns 0 on success.
 generate_session_id() {
     local nonce="$1"
     local session_pub="$2"
@@ -114,7 +116,8 @@ generate_session_id() {
 
 # generate_session_keypair
 # Create a fresh ephemeral hybrid key pair for a single session.
-# Returns the path to the session bundle directory.
+# Prints the path to the session bundle directory to stdout.
+# Returns 0 on success; calls log_fatal (exits) if master key is missing or keygen fails.
 generate_session_keypair() {
     require_oqs_build
 
@@ -183,7 +186,8 @@ generate_session_keypair() {
 
 # sign_session_keys BUNDLE_DIR MASTER_PRIVATE_KEY
 # Create a signature over the session public keys + nonce using the master key.
-# This binds the ephemeral session to the master identity.
+# This binds the ephemeral session to the master identity (Layer 1 → Layer 2).
+# Returns 0 on success; calls log_fatal (exits) if signing fails.
 sign_session_keys() {
     local bundle_dir="$1"
     local master_key="$2"
@@ -223,8 +227,10 @@ sign_session_keys() {
 
 # export_session_bundle BUNDLE_DIR
 # Package the session bundle for transmission to the server.
-# Outputs: session public keys + master signature + nonce + session ID
+# Copies: session public keys + master signature + nonce + session ID.
 # Private keys are NEVER exported.
+# Prints the export directory path to stdout.
+# Returns 0 on success; calls log_fatal (exits) if bundle directory is missing.
 export_session_bundle() {
     local bundle_dir="$1"
 
@@ -249,6 +255,7 @@ export_session_bundle() {
 
 # list_active_sessions
 # Show any active (not yet destroyed) session bundles.
+# Returns 0 always (no active sessions is normal and expected).
 list_active_sessions() {
     log_section "Active OTK Session Bundles"
 

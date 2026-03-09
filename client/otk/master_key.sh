@@ -52,6 +52,7 @@ _ensure_otk_dirs() {
 # _check_incomplete_keys
 # Detect and warn about incomplete master key files left behind by interrupted
 # key generation (e.g. ssh-keygen killed mid-operation).
+# Returns 0 if no problems found, 1 if an incomplete or truncated key is detected.
 _check_incomplete_keys() {
     local key_path="${OTK_MASTER_DIR}/${OTK_MASTER_SIGN_KEY}"
     local pub_path="${OTK_MASTER_DIR}/${OTK_MASTER_SIGN_PUB}"
@@ -90,6 +91,8 @@ _check_incomplete_keys() {
 # generate_master_key [--force]
 # Generate a new ML-DSA-87 master key pair for OTK-PQ authentication.
 # The private key stays on the client; the public key is enrolled on servers.
+# Returns 0 on success, 1 if key already exists (without --force).
+# Calls log_fatal (exits) if OQS build is missing or ssh-keygen fails.
 generate_master_key() {
     local force=false
     [[ "${1:-}" == "--force" ]] && force=true
@@ -238,6 +241,7 @@ verify_master_key() {
 # Output the master public key contents to stdout for server enrollment.
 # This is the ONLY time master key material should traverse the network —
 # during initial enrollment over a trusted channel.
+# Returns 0 on success; calls log_fatal (exits) if the public key is not found.
 export_master_public_key() {
     local pub_path="${OTK_MASTER_DIR}/${OTK_MASTER_SIGN_PUB}"
 
@@ -252,6 +256,7 @@ export_master_public_key() {
 
 # master_key_info
 # Display metadata about the master key (fingerprint, algorithm, age).
+# Returns 0 on success, 1 if no master key is found.
 master_key_info() {
     local key_path="${OTK_MASTER_DIR}/${OTK_MASTER_SIGN_KEY}"
     local pub_path="${OTK_MASTER_DIR}/${OTK_MASTER_SIGN_PUB}"
@@ -293,6 +298,7 @@ master_key_info() {
 
 # _archive_master_key
 # Move the current master key to an archive directory with timestamp.
+# Returns 0 always.
 _archive_master_key() {
     local archive_dir="${OTK_MASTER_DIR}/archive"
     local timestamp
@@ -315,6 +321,7 @@ _archive_master_key() {
 # rotate_master_key
 # Generate a new master key and archive the old one.
 # WARNING: After rotation, all servers must re-enroll the new public key.
+# Returns 0 on success or cancellation.
 rotate_master_key() {
     log_section "OTK-PQ Master Key Rotation"
     log_warn "IMPORTANT: After rotation, all servers must re-enroll your new master public key."

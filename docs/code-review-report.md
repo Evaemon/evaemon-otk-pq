@@ -121,8 +121,11 @@ Het evaemon-otk-pq project is een goed gestructureerd en veilig systeem voor pos
 ### LAAG PRIORITEIT
 
 #### 7. Lange Functies Opsplitsen
-- `otk_connect()` is 100+ regels — kan opgesplitst worden in kleinere functies zoals `_build_session_bundle()`, `_execute_remote_verification()`, `_cleanup_session()`.
-- **Status:** Open (refactor — geen security impact)
+- `_push_and_connect()` was 150+ regels — opgesplitst in drie gerichte functies:
+  - `_find_bootstrap_key()` — zoekt een bruikbare bootstrap sleutel (PQ of klassiek)
+  - `_execute_remote_verification()` — installeert de ephemeral session key op de server
+  - `_cleanup_session()` — verwijdert de ephemeral key na afloop van de sessie
+- **Status:** Opgelost ✅
 
 #### 8. Disk-Full Handling bij Secure Delete
 - `_secure_delete()` faalt stil als de disk vol is tijdens multi-pass overwrite.
@@ -146,7 +149,10 @@ Het evaemon-otk-pq project is een goed gestructureerd en veilig systeem voor pos
 
 #### 12. Exit Codes Documenteren
 - Functies retourneren 0/1 maar de betekenis is niet altijd gedocumenteerd in commentaar.
-- **Status:** Open
+- Alle publieke functies in de OTK scripts hebben nu een `# Returns ...` regel in hun header:
+  `otk_connect.sh`, `session_key.sh`, `otk_lifecycle.sh`, `otk_server.sh`,
+  `revocation_ledger.sh`, `master_key.sh`
+- **Status:** Opgelost ✅
 
 ---
 
@@ -170,8 +176,8 @@ Het evaemon-otk-pq project is een goed gestructureerd en veilig systeem voor pos
 3. **MEDIUM:** Voeg traps toe voor temp-file cleanup in `revocation_ledger.sh` en `otk_connect.sh`
 4. **MEDIUM:** Fix base64 compatibiliteit (GNU/BSD) met `tr -d '\n'` fallback
 5. **MEDIUM:** Verbeter nonce validatie foutmeldingen om clock skew te detecteren
-6. **LAAG:** Refactor lange functies (>100 regels) naar kleinere eenheden
-7. **LAAG:** Documenteer exit codes voor alle publieke functies
+6. ~~**LAAG:** Refactor lange functies (>100 regels) naar kleinere eenheden~~ ✅ Opgelost
+7. ~~**LAAG:** Documenteer exit codes voor alle publieke functies~~ ✅ Opgelost
 
 ---
 

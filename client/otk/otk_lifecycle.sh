@@ -21,6 +21,7 @@ source "${SCRIPT_DIR}/../../shared/functions.sh"
 # _secure_delete FILE
 # Overwrite a file with random data before unlinking.
 # Uses shred if available, falls back to manual overwrite.
+# Returns 0 always (best-effort; logs a warning if overwrite fails due to disk full).
 _secure_delete() {
     local file="$1"
 
@@ -55,6 +56,7 @@ _secure_delete() {
 # Securely destroy all key material in a session bundle.
 # This is the core Layer 3 operation — after this, the session key
 # ceases to exist and cannot be reconstructed.
+# Returns 0 always (missing bundle is treated as already destroyed).
 destroy_session() {
     local bundle_dir="$1"
 
@@ -147,6 +149,7 @@ verify_destruction() {
 # cleanup_stale_sessions
 # Destroy any leftover session bundles that were not properly cleaned up.
 # This handles edge cases like interrupted connections or crashes.
+# Returns 0 always (no stale sessions is normal and expected).
 cleanup_stale_sessions() {
     log_section "OTK-PQ Stale Session Cleanup"
 
@@ -181,6 +184,7 @@ cleanup_stale_sessions() {
 # Mark a session bundle as used (prevents reuse on client side).
 # The server-side revocation ledger provides the authoritative check,
 # but this client-side flag provides defense-in-depth.
+# Returns 0 on success, 1 if the bundle directory is not found.
 mark_session_used() {
     local bundle_dir="$1"
 
@@ -196,6 +200,7 @@ mark_session_used() {
 
 # is_session_used BUNDLE_DIR
 # Check if a session has already been used.
+# Returns 0 if the session was used, 1 if it has not been used yet.
 is_session_used() {
     local bundle_dir="$1"
 

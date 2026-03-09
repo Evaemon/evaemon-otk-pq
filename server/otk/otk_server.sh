@@ -40,6 +40,7 @@ _ensure_server_otk_dirs() {
 # Register a client's master public key on the server.
 # The public key is stored in OTK_SERVER_ENROLLED_DIR/<client_name>.pub
 # If PUBLIC_KEY_FILE is not given, reads from stdin (for piped enrollment).
+# Returns 0 on success, 1 if the key file is not a valid SSH public key.
 enroll_master_key() {
     local client_name="${1:-}"
     local pub_key_file="${2:-}"
@@ -115,6 +116,7 @@ enroll_master_key() {
 
 # list_enrolled
 # Show all enrolled client master public keys.
+# Returns 0 always.
 list_enrolled() {
     _ensure_server_otk_dirs
 
@@ -146,6 +148,7 @@ list_enrolled() {
 
 # revoke_client CLIENT_NAME
 # Remove a client's enrollment (reject all future sessions from this client).
+# Returns 0 on success, 1 if the client is not enrolled.
 revoke_client() {
     local client_name="${1:-}"
 
@@ -308,6 +311,7 @@ verify_session_bundle() {
 # _identify_client EXPORT_DIR
 # Try to identify which enrolled client created the session bundle
 # by checking the master signature against all enrolled public keys.
+# Prints the client name to stdout and returns 0 if found; returns 1 if no match.
 _identify_client() {
     local export_dir="$1"
 
@@ -350,6 +354,7 @@ _identify_client() {
 
 # setup_otk_server
 # Configure the server for OTK-PQ mode alongside standard PQ SSH.
+# Returns 0 on success.
 setup_otk_server() {
     _ensure_server_otk_dirs
 
