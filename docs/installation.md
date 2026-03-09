@@ -261,12 +261,13 @@ bash server/otk/revocation_ledger.sh stats
 ### Running the test suite
 
 ```bash
-# OTK-PQ tests (103 assertions, no OQS binary required)
+# OTK-PQ tests (118 assertions, no OQS binary required)
 bash shared/tests/unit_tests/test_otk_config.sh
 bash shared/tests/unit_tests/test_otk_session_key.sh
 bash shared/tests/unit_tests/test_otk_lifecycle.sh
 bash shared/tests/unit_tests/test_otk_master_key.sh
 bash shared/tests/unit_tests/test_otk_revocation_ledger.sh
+bash shared/tests/unit_tests/test_otk_connect.sh
 
 # Base unit tests (no OQS binary required)
 bash shared/tests/unit_tests/test_validation.sh
@@ -279,7 +280,7 @@ bash shared/tests/integration_tests/test_server.sh
 bash shared/tests/integration_tests/test_key_rotation.sh
 ```
 
-All tests exit 0 on success. The full suite counts **334+ tests**.
+All tests exit 0 on success. The full suite counts **349+ tests** across 19 test files.
 
 ---
 

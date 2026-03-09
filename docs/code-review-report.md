@@ -9,7 +9,7 @@
 
 ## Samenvatting
 
-Het evaemon-otk-pq project is een goed gestructureerd en veilig systeem voor post-quantum SSH-authenticatie met one-time keys. De codebase bestaat uit ~2.949 regels productiecode verdeeld over 28 shell scripts, met 349+ tests in 18 testbestanden.
+Het evaemon-otk-pq project is een goed gestructureerd en veilig systeem voor post-quantum SSH-authenticatie met one-time keys. De codebase bestaat uit ~2.949 regels productiecode verdeeld over 28 shell scripts, met 349+ tests in 19 testbestanden.
 
 **Overall scores:**
 
@@ -17,7 +17,7 @@ Het evaemon-otk-pq project is een goed gestructureerd en veilig systeem voor pos
 |------------------|--------|-------------------------------------------------|
 | Error Handling   | 8/10   | `set -eo pipefail` overal, goede validatie      |
 | Security         | 9/10   | Permissions, secure delete, geen hardcoded secrets |
-| Test Coverage    | 9/10   | 349+ tests, 18 test files                       |
+| Test Coverage    | 9/10   | 349+ tests, 19 test files                       |
 | Cryptografie     | 9/10   | ML-DSA-87, ML-KEM-1024, SHA3-256, Ed25519 hybrid |
 | Documentatie     | 9/10   | Goede README, threat model, architectuur         |
 | Code Quality     | 8/10   | Consistent style, goede naamgeving               |
@@ -50,8 +50,8 @@ Het evaemon-otk-pq project is een goed gestructureerd en veilig systeem voor pos
 - Signature verificatie via `ssh-keygen -Y verify` (standaard OpenSSH)
 
 ### Test Coverage (Uitgebreid)
-- 334+ unit tests verdeeld over 17 testbestanden
-- Tests voor: OTK configuratie (33), session keys (18), lifecycle (17), master keys (15), revocation (20)
+- 349+ unit tests verdeeld over 19 testbestanden
+- Tests voor: OTK configuratie (33), session keys (18), lifecycle (17), master keys (15), revocation (20), connect helpers (15)
 - Validatie (44), logging (26), functions (13), en meer
 - Integratie tests voor keygen, server setup, key rotation
 - Tests draaien zonder OQS binaries (mock-friendly design)

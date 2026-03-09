@@ -151,14 +151,14 @@ documented checks are present.
 - Calls `generate_session_keypair()` to create the full session bundle
 
 **Phase 2 — Connect (Layer 1 + 2):**
-- Finds a bootstrap key (existing PQ or classical SSH key) for the initial push
-- Pushes session PQ public key to server's `authorized_keys` via the bootstrap key
-  (all variable data is base64-encoded before injection into the remote script to
-  prevent shell metacharacter injection)
+- `_find_bootstrap_key()` — locates an existing PQ or classical SSH key (PQ preferred)
+- `_execute_remote_verification()` — pushes the session PQ public key to the server's
+  `authorized_keys` via the bootstrap key (all variable data is base64-encoded before
+  injection into the remote script to prevent shell metacharacter injection)
 - Connects using the ephemeral PQ session key with hybrid KEX algorithms:
   `mlkem1024nistp384-sha384,mlkem768x25519-sha256,curve25519-sha256`
-- After disconnect, removes the ephemeral key from server's `authorized_keys`
-  using the bootstrap key
+- `_cleanup_session()` — removes the ephemeral key from the server's `authorized_keys`
+  using the bootstrap key (non-fatal: a failed cleanup never aborts the flow)
 
 **Phase 3 — Post-connect (Layer 3):**
 - `mark_session_used()` — creates `.used` flag file (client-side defense-in-depth)

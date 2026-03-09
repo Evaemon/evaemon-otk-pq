@@ -447,4 +447,4 @@ bash shared/tests/integration_tests/test_server.sh       # 53 — sshd_config
 bash shared/tests/integration_tests/test_key_rotation.sh  # 14 — rotation
 ```
 
-Exit code 0 = all tests passed. Full suite: **334+ tests**.
+Exit code 0 = all tests passed. Full suite: **349+ tests** across 19 test files.
